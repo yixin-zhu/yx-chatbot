@@ -1,7 +1,12 @@
 server:
   address: 0.0.0.0
   port: 8081
+
 spring:
+  servlet:
+    multipart:
+      max-file-size: 200MB
+      max-request-size: 200MB
   application:
     name: yxchatbot
   datasource:
@@ -37,3 +42,10 @@ jwt:
   refresh-expiration: 6048000000
 api:
   key: 734440e045bbd1aeaba5292d62786a5d.pdq8ik04sXo1tygr
+
+minio:
+  endpoint: http://localhost:9000
+  accessKey: minioadmin
+  secretKey: minioadmin
+  bucketName: uploads
+  publicUrl: http://localhost:9000

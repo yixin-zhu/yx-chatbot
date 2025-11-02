@@ -3,6 +3,8 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.example.entity.FileUpload;
+import org.example.repository.FileUploadRepository;
 import org.example.utils.JwtUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +34,8 @@ import java.util.stream.Collectors;
  *    - 这类API的控制器方法通过@RequestAttribute("userId")获取用户ID
  *    - 由本过滤器负责从JWT令牌中提取用户ID并设置为请求属性
  */
+
+// 由于需要权限判断，本filter需要有查询数据库的能力
 @Component
 public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
 
@@ -42,8 +46,8 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
     @Autowired
     private JwtUtils jwtUtils;
 
-    //@Autowired
-    //private FileUploadRepository fileUploadRepository;
+    @Autowired
+    private FileUploadRepository fileUploadRepository;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
@@ -96,22 +100,20 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
             }
 
             boolean isChunkUpload = path.matches(".*/upload/chunk.*");
-            logger.debug("请求路径: {}, 是否为分片上传: {}", path, isChunkUpload);
+            logger.trace("请求路径: {}, 是否为分片上传: {}", path, isChunkUpload);
 
             // 获取路径中的资源ID
             String resourceId = extractResourceIdFromPath(request);
 
             // 如果URL不含资源ID，直接放行
             if (resourceId == null) {
-                logger.debug("未找到资源ID，直接放行");
+                logger.trace("未找到资源ID，直接放行");
                 filterChain.doFilter(request, response);
                 return;
             }
 
-
             // 获取资源的组织标签
-            //ResourceInfo resourceInfo = getResourceInfo(resourceId);
-            ResourceInfo resourceInfo = null; // TODO: 实现获取资源信息的方法
+            ResourceInfo resourceInfo = getResourceInfo(resourceId);
 
             // 如果是分片上传并且资源未找到(首次上传)，允许请求通过
             if (isChunkUpload && resourceInfo == null) {
@@ -200,7 +202,7 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
      */
     private String extractResourceIdFromPath(HttpServletRequest request) {
         String path = request.getRequestURI();
-        logger.debug("提取资源ID，请求路径: {}", path);
+        logger.trace("提取资源ID，请求路径: {}", path);
 
         // 提取不同类型资源的ID
         // 1. 文件资源: /api/v1/files/{fileMd5}
@@ -238,14 +240,14 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
             return knowledgeId;
         }
 
-        logger.debug("未匹配到任何资源类型，返回null");
+        logger.trace("未匹配到任何资源类型，返回null");
         return null;
     }
 
     /**
      * 获取资源信息
      * 实际项目中应该根据不同资源类型查询对应的数据库表
-
+     */
     private ResourceInfo getResourceInfo(String resourceId) {
         if (resourceId == null) {
             logger.debug("资源ID为空，无法获取资源信息");
@@ -273,16 +275,15 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
         // TODO: 如果需要支持其他类型的资源，可以在这里添加查询逻辑
 
         // 如果未找到资源，返回null
-        logger.debug("未找到任何资源信息 => 资源ID: {}", resourceId);
+        logger.trace("未找到任何资源信息 => 资源ID: {}", resourceId);
         return null;
     }
-*/
+
     /**
      * 检查资源是否为公开资源
      */
     private boolean isPublicResource(String resourceId) {
-        //ResourceInfo resourceInfo = getResourceInfo(resourceId);
-        ResourceInfo resourceInfo = null; // TODO: 实现获取资源信息的方法
+        ResourceInfo resourceInfo = getResourceInfo(resourceId);
         return resourceInfo != null && resourceInfo.isPublic();
     }
 
