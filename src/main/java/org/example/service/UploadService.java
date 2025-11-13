@@ -59,6 +59,7 @@ public class UploadService {
      * @param userId 上传用户ID
      * @throws IOException 如果文件读取失败
      */
+    // 核心的分片上传方法
     public void uploadChunk(String fileMd5, int chunkIndex, long totalSize, String fileName,
                             MultipartFile file, String orgTag, boolean isPublic, String userId) throws IOException {
         // 获取文件类型信息
@@ -72,11 +73,11 @@ public class UploadService {
             // 检查 file_upload 表中是否存在该 file_md5
             boolean fileExists = fileUploadRepository.findByFileMd5AndUserId(fileMd5, userId).isPresent();
             logger.debug("检查文件记录是否存在 => fileMd5: {}, fileName: {}, fileType: {}, exists: {}", fileMd5, fileName, fileType, fileExists);
-
+            // 如果不存在，则在文件表file_upload里，创建新的文件记录
             if (!fileExists) {
                 logger.info("创建新的文件记录 => fileMd5: {}, fileName: {}, fileType: {}, totalSize: {}, userId: {}, orgTag: {}, isPublic: {}",
                         fileMd5, fileName, fileType, totalSize, userId, orgTag, isPublic);
-                // 插入 file_upload 表
+                // 创建新的文件记录，插入 file_upload 表
                 FileUpload fileUpload = new FileUpload();
                 fileUpload.setFileMd5(fileMd5);
                 fileUpload.setFileName(fileName); // 文件名可以从请求中获取
@@ -438,6 +439,7 @@ public class UploadService {
      * @param userId 用户ID
      * @return 文件的总分片数
      */
+    // 从数据库的file_upload表中获取文件总大小，再根据默认分片大小，计算总分片数
     public int getTotalChunks(String fileMd5, String userId) {
         logger.info("计算文件总分片数 => fileMd5: {}, userId: {}", fileMd5, userId);
         try {

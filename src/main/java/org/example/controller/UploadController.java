@@ -36,11 +36,6 @@ public class UploadController {
     @Autowired
     private FileTypeValidationService fileTypeValidationService;
 
-    // ？这个构造函数是什么意思？ 为什么要手动注入？
-    public UploadController(UploadService uploadService) {
-        this.uploadService = uploadService;
-    }
-
     /**
      * 上传文件分片接口
      *
@@ -55,6 +50,8 @@ public class UploadController {
      * @return 返回包含已上传分片和上传进度的响应
      * @throws IOException 当文件读写发生错误时抛出
      */
+    // 把文件上传到MinIO，然后记录分片信息到数据库
+    // 分片上传接口
     @PostMapping("/chunk")
     public ResponseEntity<Map<String, Object>> uploadChunk(
             @RequestParam("fileMd5") String fileMd5,
@@ -69,7 +66,7 @@ public class UploadController {
 
         LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("UPLOAD_CHUNK");
         try {
-            // 文件类型验证（仅在第一个分片时进行验证）
+            // 文件类型验证（仅在第一个分片时进行验证）,调用FileTypeValidationService的validateFileType方法
             if (chunkIndex == 0) {
                 FileTypeValidationService.FileTypeValidationResult validationResult =
                         fileTypeValidationService.validateFileType(fileName);
@@ -97,7 +94,7 @@ public class UploadController {
             LogUtils.logBusiness("UPLOAD_CHUNK", userId, "接收到分片上传请求: fileMd5=%s, chunkIndex=%d, fileName=%s, fileType=%s, contentType=%s, fileSize=%d, totalSize=%d, orgTag=%s, isPublic=%s",
                     fileMd5, chunkIndex, fileName, fileType, contentType, file.getSize(), totalSize, orgTag, isPublic);
 
-            // 如果未指定组织标签，则获取用户的主组织标签
+            // 如果未指定组织标签，则获取用户的主组织标签指定为组织标签
             if (orgTag == null || orgTag.isEmpty()) {
                 try {
                     LogUtils.logBusiness("UPLOAD_CHUNK", userId, "组织标签未指定，尝试获取用户主组织标签: fileName=%s", fileName);
@@ -119,16 +116,17 @@ public class UploadController {
             // 核心步骤
             uploadService.uploadChunk(fileMd5, chunkIndex, totalSize, fileName, file, orgTag, isPublic, userId);
 
-            // 计算上传进度，需要用到?
+            // 计算上传进度，需要用到Redis 的 BitMap, 从其中获取已上传的分片列表
             List<Integer> uploadedChunks = uploadService.getUploadedChunks(fileMd5, userId);
             int actualTotalChunks = uploadService.getTotalChunks(fileMd5, userId);
+            // 作简单的除法，计算进度
             double progress = calculateProgress(uploadedChunks, actualTotalChunks);
 
             LogUtils.logBusiness("UPLOAD_CHUNK", userId, "分片上传成功: fileMd5=%s, fileName=%s, fileType=%s, chunkIndex=%d, 进度=%.2f%%",
                     fileMd5, fileName, fileType, chunkIndex, progress);
             monitor.end("分片上传成功");
 
-            // 构建数据对象
+            // 构建返回数据对象
             Map<String, Object> data = new HashMap<>();
             data.put("uploaded", uploadedChunks);
             data.put("progress", progress);
@@ -157,6 +155,7 @@ public class UploadController {
      * @param fileMd5 文件的MD5值，用于唯一标识文件
      * @return 返回包含已上传分片和上传进度的响应
      */
+    // 查询上传状态接口
     @GetMapping("/status")
     public ResponseEntity<Map<String, Object>> getUploadStatus(@RequestParam("file_md5") String fileMd5,
                                                                @RequestAttribute("userId") String userId) {
@@ -217,6 +216,7 @@ public class UploadController {
      * @param userId 当前用户ID
      * @return 返回包含合并后文件访问URL的响应
      */
+    // 文件合并接口
     @Transactional
     @PostMapping("/merge")
     public ResponseEntity<Map<String, Object>> mergeFile(

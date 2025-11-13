@@ -53,6 +53,7 @@ public class DocumentController {
      * @param role 用户角色
      * @return 删除结果
      */
+    // 删除文档接口
     @DeleteMapping("/{fileMd5}")
     public ResponseEntity<?> deleteDocument(
             @PathVariable String fileMd5,
