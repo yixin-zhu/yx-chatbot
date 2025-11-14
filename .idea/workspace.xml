@@ -5,10 +5,12 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="233c358a-129d-49a7-8f5a-0548ba491696" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/src/main/java/org/example/controller/ParseController.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/org/example/entity/DocumentVector.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/org/example/repository/DocumentVectorRepository.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/org/example/service/ParseService.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/controller/UploadController.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/controller/UploadController.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/service/UploadService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/service/UploadService.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/application.yaml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/service/OrgTagCacheService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/service/OrgTagCacheService.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

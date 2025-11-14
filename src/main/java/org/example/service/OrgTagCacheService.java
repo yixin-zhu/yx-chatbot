@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
 
 /**
  * 组织标签缓存服务
- * 用于缓存用户组织标签信息，提高权限验证效率
+ * 用于在redis中缓存用户组织标签信息，提高权限验证效率
  */
 @Service
 public class OrgTagCacheService {
