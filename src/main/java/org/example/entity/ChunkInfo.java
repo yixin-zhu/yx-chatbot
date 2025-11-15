@@ -8,6 +8,7 @@ import lombok.Data;
  * 它是一个实体类，与数据库中的 'chunk_info' 表对应
  * 该类用来存储每个文件分块的元数据，包括分块的唯一标识、属于哪个文件、分块的顺序、分块的校验码和存储位置
  */
+// 分片表，实现了大文件分块上传和存储机制
 @Data
 @Entity
 @Table(name = "chunk_info")
