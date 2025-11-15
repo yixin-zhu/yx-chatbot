@@ -14,6 +14,7 @@ public class ParseController {
     private ParseService parseService;
 
     // 文档解析接口
+    // MultipartFile参数用于接收前端上传的文件
     @PostMapping
     public ResponseEntity<String> parseDocument(@RequestParam("file") MultipartFile file,
                                                 @RequestParam("file_md5") String fileMd5,
