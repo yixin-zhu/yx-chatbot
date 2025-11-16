@@ -101,8 +101,9 @@ public class HybridSearchService {
                                 // 条件1: 用户可访问自己的文档
                                 .should(s1 -> s1.term(t -> t.field("userId").value(userDbId)))
                                 // 条件2: 公开文档
-                                .should(s2 -> s2.term(t -> t.field("public").value(true)))
-                                // 条件3: 组织标签
+                                //.should(s2 -> s2.term(t -> t.field("public").value(true)))
+                                // 条件3: 组织标签过滤
+                                /*
                                 .should(s3 -> {
                                     if (userEffectiveTags.isEmpty()) {
                                         return s3.matchNone(mn -> mn);
@@ -114,7 +115,7 @@ public class HybridSearchService {
                                             return inner;
                                         });
                                     }
-                                })
+                                    */
                         ))
                 ));
 

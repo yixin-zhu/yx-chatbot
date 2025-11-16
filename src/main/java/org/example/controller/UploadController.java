@@ -1,6 +1,8 @@
 package org.example.controller;
+import org.example.DTO.FileProcessingTask;
 import org.example.entity.FileUpload;
 import org.example.repository.FileUploadRepository;
+import org.example.service.FileProcessingService;
 import org.example.service.FileTypeValidationService;
 import org.example.service.UploadService;
 import org.example.service.UserService;
@@ -35,6 +37,9 @@ public class UploadController {
 
     @Autowired
     private FileTypeValidationService fileTypeValidationService;
+
+    @Autowired
+    private FileProcessingService fileProcessingService;
 
     /**
      * 上传文件分片接口
@@ -270,6 +275,18 @@ public class UploadController {
             LogUtils.logBusiness("MERGE_FILE", userId, "开始合并文件分片: fileMd5=%s, fileName=%s, fileType=%s, 分片数量=%d", request.fileMd5(), request.fileName(), fileType, totalChunks);
             String objectUrl = uploadService.mergeChunks(request.fileMd5(), request.fileName(), userId);
             LogUtils.logFileOperation(userId, "MERGE", request.fileName(), request.fileMd5(), "SUCCESS");
+
+            // 处理文件提取和向量化
+            FileProcessingTask task = new FileProcessingTask(
+                    request.fileMd5(),
+                    objectUrl,
+                    request.fileName(),
+                    fileUpload.getUserId(),
+                    fileUpload.getOrgTag(),
+                    fileUpload.isPublic()
+            );
+
+            fileProcessingService.processTask(task);
 
             // 构建数据对象
             Map<String, Object> data = new HashMap<>();
