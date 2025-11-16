@@ -6,6 +6,7 @@ import io.minio.RemoveObjectArgs;
 import io.minio.http.Method;
 import org.example.entity.FileUpload;
 import org.example.entity.User;
+import org.example.repository.DocumentVectorRepository;
 import org.example.repository.FileUploadRepository;
 import org.example.repository.UserRepository;
 import org.slf4j.Logger;
@@ -33,8 +34,8 @@ public class DocumentService {
     @Autowired
     private FileUploadRepository fileUploadRepository;
 
-    //xin:@Autowired
-    //xin:private DocumentVectorRepository documentVectorRepository;
+    @Autowired
+    /private DocumentVectorRepository documentVectorRepository;
 
     @Autowired
     private MinioClient minioClient;
@@ -93,8 +94,8 @@ public class DocumentService {
 
             // 3. 删除DocumentVector记录
             try {
-                //xin:documentVectorRepository.deleteByFileMd5(fileMd5);
-                //xin:logger.info("成功删除文档向量记录: {}", fileMd5);
+                documentVectorRepository.deleteByFileMd5(fileMd5);
+                logger.info("成功删除文档向量记录: {}", fileMd5);
             } catch (Exception e) {
                 logger.error("删除文档向量记录时出错: {}", fileMd5, e);
                 // 继续删除其他数据
