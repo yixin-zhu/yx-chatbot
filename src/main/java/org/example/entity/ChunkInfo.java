@@ -4,45 +4,28 @@ import jakarta.persistence.*;
 import lombok.Data;
 
 /**
- * ChunkInfo 类用于表示文件分块的信息
- * 它是一个实体类，与数据库中的 'chunk_info' 表对应
- * 该类用来存储每个文件分块的元数据，包括分块的唯一标识、属于哪个文件、分块的顺序、分块的校验码和存储位置
+ * 实体类，与数据库中的 'chunk_info' 表对应
  */
 // 分片表，实现了大文件分块上传和存储机制
 @Data
 @Entity
 @Table(name = "chunk_info")
 public class ChunkInfo {
-    /**
-     * 分块信息的唯一标识符
-     * 由数据库自动生成，用于唯一确定一个分块信息
-     */
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /**
-     * 文件的MD5值
-     * 用于标识一个文件，同一个文件的MD5值相同，不同文件的MD5值不同
-     */
+    // 所属文件的MD5值，用于标识该分块属于哪个文件
     private String fileMd5;
 
-    /**
-     * 分块的索引号
-     * 表示文件中的第几个分块，用于保持分块的顺序
-     */
+    // 分块的索引，表示这是文件的第几个分块
     private int chunkIndex;
 
-    /**
-     * 分块的MD5值
-     * 每个分块的唯一标识，用于校验分块的完整性和正确性
-     */
+    // 分块的MD5值，用于校验分块数据的完整性
     private String chunkMd5;
 
-    /**
-     * 分块的存储路径
-     * 表示分块在系统中的存储位置，可以是绝对路径或相对路径
-     */
+    // 分块在minIO存储系统中的路径
     private String storagePath;
 }
 

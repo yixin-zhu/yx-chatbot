@@ -35,7 +35,7 @@ public class DocumentService {
     private FileUploadRepository fileUploadRepository;
 
     @Autowired
-    /private DocumentVectorRepository documentVectorRepository;
+    private DocumentVectorRepository documentVectorRepository;
 
     @Autowired
     private MinioClient minioClient;
@@ -48,6 +48,9 @@ public class DocumentService {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private ElasticsearchService elasticsearchService;
 
     /**
      * 删除文档及其相关数据
@@ -70,8 +73,8 @@ public class DocumentService {
 
             // 1. 删除Elasticsearch中的数据
             try {
-                //xin:elasticsearchService.deleteByFileMd5(fileMd5);
-                //xin:logger.info("成功从Elasticsearch删除文档: {}", fileMd5);
+                elasticsearchService.deleteByFileMd5(fileMd5);
+                logger.info("成功从Elasticsearch删除文档: {}", fileMd5);
             } catch (Exception e) {
                 logger.error("从Elasticsearch删除文档时出错: {}", fileMd5, e);
                 // 继续删除其他数据

@@ -21,15 +21,11 @@ public class EsDocument {
     private String orgTag;         // 组织标签
     private boolean isPublic;      // 是否公开
 
-    /**
-     * 默认构造函数，用于Jackson反序列化
-     */
+    // 无参构造函数，用于反序列化
     public EsDocument() {
     }
 
-    /**
-     * 完整构造函数，包含权限字段
-     */
+    // 全参构造函数
     public EsDocument(String id, String fileMd5, int chunkId, String content, 
                      float[] vector, String modelVersion, 
                      String userId, String orgTag, boolean isPublic) {

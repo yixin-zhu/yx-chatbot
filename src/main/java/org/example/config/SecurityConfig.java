@@ -12,32 +12,29 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
-/**
- * 配置Spring Security的类
- * 该类定义了应用的安全配置，包括请求的授权规则、CSRF保护的配置以及会话管理策略
- */
+import java.util.Arrays;
+import java.util.Collections;
+
+
+// @Configuration表示这是一个配置类，里面有Bean定义，Spring容器会扫描并加载它
 @Configuration
+// @EnableWebSecurity启用自定义的Web安全配置，会自动注册一个名为 SecurityFilterChain 的过滤器链，我们来实现它
 @EnableWebSecurity
 public class SecurityConfig {
-
     // 日志记录器，用于记录安全配置的相关信息
     private static final Logger logger = LoggerFactory.getLogger(SecurityConfig.class);
-
+    // 这两个过滤器，被过滤器链调用，用于处理JWT认证和组织标签授权
     @Autowired
     private JwtAuthenticationFilter jwtAuthenticationFilter;
-
     @Autowired
     private OrgTagAuthorizationFilter orgTagAuthorizationFilter;
 
-    /**
-     * 配置SecurityFilterChain bean的方法
-     * 该方法主要用于配置应用的安全规则，包括哪些请求需要授权、CSRF保护的启用或禁用、会话管理策略等
-     *
-     * @param http HttpSecurity对象，用于配置应用的安全规则
-     * @return SecurityFilterChain对象，代表配置好的安全过滤链
-     * @throws Exception 如果配置过程中发生错误，会抛出异常
-     */
+
+     // 该方法主要用于配置应用的安全规则，包括哪些请求需要授权、CSRF保护的启用或禁用、会话管理策略等
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         try {
@@ -67,11 +64,13 @@ public class SecurityConfig {
                             .requestMatchers("/api/v1/users/primary-org").hasAnyRole("USER", "ADMIN")
                             // 其他请求需要认证
                             .anyRequest().authenticated())
-                    // 配置会话管理策略
-                    // 设置会话创建策略为STATELESS，表示不会创建会话，通常用于无状态的API应用
+                    // 关闭session，只使用JWT进行认证
                     .sessionManagement(session -> session
                             .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                     // 添加JWT认证过滤器
+                    // UsernamePasswordAuthenticationFilter是Spring Security默认的认证过滤器
+                    // 它专门处理 POST 请求且路径为 /login 的表单提交。它会从请求体中提取 username 和 password 参数
+                    // 我们将自定义的 JwtAuthenticationFilter 放在它之前，以确保 JWT 认证优先处理
                     .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                     // 添加组织标签授权过滤器
                     .addFilterAfter(orgTagAuthorizationFilter, JwtAuthenticationFilter.class);
@@ -86,6 +85,20 @@ public class SecurityConfig {
             // 抛出异常，以便外部处理
             throw e;
         }
+    }
+
+    // 2. 专业的跨域配置源
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOriginPatterns(Arrays.asList("*")); // 允许所有来源，生产环境建议指定具体域名
+        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(Arrays.asList("*"));
+        configuration.setAllowCredentials(true); // 允许携带 Cookie/Auth Header
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration); // 对所有路径生效
+        return source;
     }
 }
 
