@@ -17,11 +17,12 @@ import org.springframework.context.annotation.Configuration;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.json.jackson.JacksonJsonpMapper;
 import co.elastic.clients.transport.rest_client.RestClientTransport;
-
+import org.springframework.data.elasticsearch.client.ClientConfiguration;
+import org.springframework.data.elasticsearch.client.elc.ElasticsearchConfiguration;
 
 // Elasticsearch客户端配置类
 @Configuration
-public class EsConfig {
+public class EsConfig extends ElasticsearchConfiguration {
 
     @Value("${elasticsearch.host}")
     private String host;
@@ -32,44 +33,30 @@ public class EsConfig {
     @Value("${elasticsearch.scheme:https}")
     private String scheme;
 
-    @Value("${elasticsearch.username:elastic}")
+    @Value("${elasticsearch.username}")
     private String username;
 
-    @Value("${elasticsearch.password:changeme}")
+    @Value("${elasticsearch.password}")
     private String password;
 
-    @Bean
-    public ElasticsearchClient elasticsearchClient() {
-        // 创建低级客户端
-        RestClientBuilder builder = RestClient.builder(new HttpHost(host, port, scheme));
+    // 配置 Elasticsearch 客户端连接
+    @Override
+    public ClientConfiguration clientConfiguration() {
+        return ClientConfiguration.builder()
+                .connectedTo(host + ":" + port)
+                // .usingSsl(buildSSLContext()) // 使用自定义的 SSLContext。这里注释掉了，如果需要信任所有证书可以打开
+                .withBasicAuth(username, password)
+                .build();
+    }
 
-        // 设置基本认证
-        if (username != null && !username.isEmpty()) {
-            BasicCredentialsProvider credsProvider = new BasicCredentialsProvider();
-            credsProvider.setCredentials(AuthScope.ANY, new UsernamePasswordCredentials(username, password));
-            builder.setHttpClientConfigCallback(httpClientBuilder -> {
-                // 忽略 TLS 证书（仅限开发环境）
-                try {
-                    SSLContext sslContext = SSLContexts.custom()
-                            .loadTrustMaterial(null, (X509Certificate[] chain, String authType) -> true)
-                            .build();
-                    httpClientBuilder.setSSLContext(sslContext);
-                    httpClientBuilder.setSSLHostnameVerifier(NoopHostnameVerifier.INSTANCE);
-                } catch (Exception e) {
-                    // ignore
-                }
-                return httpClientBuilder.setDefaultCredentialsProvider(credsProvider);
-            });
+    // 构建 SSLContext，信任所有证书（仅用于开发环境，生产环境请使用有效证书）
+    private SSLContext buildSSLContext() {
+        try {
+            return SSLContexts.custom()
+                    .loadTrustMaterial(null, (chain, authType) -> true)
+                    .build();
+        } catch (Exception e) {
+            throw new RuntimeException("ES SSL 配置失败", e);
         }
-
-        RestClient restClient = builder.build();
-
-        // 创建传输层
-        ElasticsearchTransport transport = new RestClientTransport(
-                restClient, new JacksonJsonpMapper()
-        );
-
-        // 返回高级客户端
-        return new ElasticsearchClient(transport);
     }
 }
