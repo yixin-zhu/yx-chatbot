@@ -44,4 +44,8 @@ public class FileUpload {
 
     @UpdateTimestamp
     private LocalDateTime mergedAt;
+
+    public boolean isPublic() {
+        return isPublic;
+    }
 }

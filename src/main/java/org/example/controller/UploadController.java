@@ -19,11 +19,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 
 @RestController
 @RequestMapping("/api/v1/upload")
@@ -83,94 +79,19 @@ public class UploadController {
     // 文件合并接口
     @Transactional
     @PostMapping("/merge")
-    public ResponseEntity<Map<String, Object>> mergeFile(
+    @LogAction(value = "UploadController", action = "mergeFile")
+    public ResponseEntity<?> mergeFile(
             @RequestBody MergeRequest request,
             @RequestAttribute("userId") String userId) {
 
-        LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("MERGE_FILE");
-        try {
-            String fileType = getFileType(request.fileName());
-            LogUtils.logBusiness("MERGE_FILE", userId, "接收到合并文件请求: fileMd5=%s, fileName=%s, fileType=%s",
-                    request.fileMd5(), request.fileName(), fileType);
+        String objectUrl = uploadService.processFileMerge(request.fileMd5(), request.fileName(), userId);
+        Map<String, Object> data = Collections.singletonMap("object_url", objectUrl);
+        return ResponseEntity.ok(Result.success("文件合并成功", data));
 
-            // 检查文件完整性和权限
-            LogUtils.logBusiness("MERGE_FILE", userId, "检查文件记录和权限: fileMd5=%s, fileName=%s", request.fileMd5(), request.fileName());
-            FileUpload fileUpload = fileUploadRepository.findByFileMd5AndUserId(request.fileMd5(), userId)
-                    .orElseThrow(() -> {
-                        LogUtils.logUserOperation(userId, "MERGE_FILE", request.fileMd5(), "FAILED_FILE_NOT_FOUND");
-                        return new RuntimeException("文件记录不存在");
-                    });
-
-            // 确保用户有权限操作该文件
-            if (!fileUpload.getUserId().equals(userId)) {
-                LogUtils.logUserOperation(userId, "MERGE_FILE", request.fileMd5(), "FAILED_PERMISSION_DENIED");
-                LogUtils.logBusiness("MERGE_FILE", userId, "权限验证失败: 尝试合并不属于自己的文件, fileMd5=%s, fileName=%s, 实际所有者=%s",
-                        request.fileMd5(), request.fileName(), fileUpload.getUserId());
-                monitor.end("合并失败：权限不足");
-                Map<String, Object> errorResponse = new HashMap<>();
-                errorResponse.put("code", HttpStatus.FORBIDDEN.value());
-                errorResponse.put("message", "没有权限操作此文件");
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
-            }
-
-            LogUtils.logBusiness("MERGE_FILE", userId, "权限验证通过，开始合并文件: fileMd5=%s, fileName=%s, fileType=%s", request.fileMd5(), request.fileName(), fileType);
-
-            // 检查分片是否全部上传完成
-            List<Integer> uploadedChunks = uploadService.getUploadedChunks(request.fileMd5(), userId);
-            int totalChunks = uploadService.getTotalChunks(request.fileMd5(), userId);
-            LogUtils.logBusiness("MERGE_FILE", userId, "分片上传状态: fileMd5=%s, fileName=%s, 已上传=%d/%d",
-                    request.fileMd5(), request.fileName(), uploadedChunks.size(), totalChunks);
-
-            if (uploadedChunks.size() < totalChunks) {
-                LogUtils.logUserOperation(userId, "MERGE_FILE", request.fileMd5(), "FAILED_INCOMPLETE_CHUNKS");
-                monitor.end("合并失败：分片未全部上传");
-                Map<String, Object> errorResponse = new HashMap<>();
-                errorResponse.put("code", HttpStatus.BAD_REQUEST.value());
-                errorResponse.put("message", "文件分片未全部上传，无法合并");
-                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
-            }
-
-            // 合并文件
-            LogUtils.logBusiness("MERGE_FILE", userId, "开始合并文件分片: fileMd5=%s, fileName=%s, fileType=%s, 分片数量=%d", request.fileMd5(), request.fileName(), fileType, totalChunks);
-            String objectUrl = uploadService.mergeChunks(request.fileMd5(), request.fileName(), userId);
-            LogUtils.logFileOperation(userId, "MERGE", request.fileName(), request.fileMd5(), "SUCCESS");
-
-            // 处理文件提取和向量化
-            FileProcessingTask task = new FileProcessingTask(
-                    request.fileMd5(),
-                    objectUrl,
-                    request.fileName(),
-                    fileUpload.getUserId(),
-                    fileUpload.getOrgTag(),
-                    fileUpload.isPublic()
-            );
-
-            fileProcessingService.processTask(task);
-
-            // 构建数据对象
-            Map<String, Object> data = new HashMap<>();
-            data.put("object_url", objectUrl);
-
-            // 构建统一响应格式
-            Map<String, Object> response = new HashMap<>();
-            response.put("code", 200);
-            response.put("message", "文件合并成功");
-            response.put("data", data);
-
-            LogUtils.logUserOperation(userId, "MERGE_FILE", request.fileMd5(), "SUCCESS");
-            monitor.end("文件合并成功");
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            String fileType = getFileType(request.fileName());
-            LogUtils.logBusinessError("MERGE_FILE", userId, "文件合并失败: fileMd5=%s, fileName=%s, fileType=%s", e,
-                    request.fileMd5(), request.fileName(), fileType);
-            monitor.end("文件合并失败: " + e.getMessage());
-            Map<String, Object> errorResponse = new HashMap<>();
-            errorResponse.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
-            errorResponse.put("message", "文件合并失败: " + e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
-        }
     }
+
+
+
 
     /**
      * 计算上传进度
@@ -180,11 +101,7 @@ public class UploadController {
      * @return 返回上传进度的百分比
      */
     private double calculateProgress(List<Integer> uploadedChunks, int totalChunks) {
-        if (totalChunks == 0) {
-            LogUtils.logBusiness("CALCULATE_PROGRESS", "system", "计算上传进度时总分片数为0");
-            return 0.0;
-        }
-        return (double) uploadedChunks.size() / totalChunks * 100;
+        return totalChunks>0 ? (double) uploadedChunks.size() / totalChunks * 100 : 0.0;
     }
 
     /**
@@ -198,39 +115,16 @@ public class UploadController {
      * @return 返回支持的文件类型信息
      */
     @GetMapping("/supported-types")
-    public ResponseEntity<Map<String, Object>> getSupportedFileTypes() {
-        LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("GET_SUPPORTED_TYPES");
-        try {
-            LogUtils.logBusiness("GET_SUPPORTED_TYPES", "system", "获取支持的文件类型列表");
+    public ResponseEntity<?> getSupportedFileTypes() {
+        // 1. 直接从 Service 获取数据
+        Map<String, Object> data = Map.of(
+                "supportedTypes", fileTypeValidationService.getSupportedFileTypes(),
+                "supportedExtensions", fileTypeValidationService.getSupportedExtensions(),
+                "description", "系统支持的文档类型文件，这些文件可以被解析并进行向量化处理"
+        );
 
-            Set<String> supportedTypes = fileTypeValidationService.getSupportedFileTypes();
-            Set<String> supportedExtensions = fileTypeValidationService.getSupportedExtensions();
-
-            // 构建数据对象
-            Map<String, Object> data = new HashMap<>();
-            data.put("supportedTypes", supportedTypes);
-            data.put("supportedExtensions", supportedExtensions);
-            data.put("description", "系统支持的文档类型文件，这些文件可以被解析并进行向量化处理");
-
-            // 构建统一响应格式
-            Map<String, Object> response = new HashMap<>();
-            response.put("code", 200);
-            response.put("message", "获取支持的文件类型成功");
-            response.put("data", data);
-
-            LogUtils.logBusiness("GET_SUPPORTED_TYPES", "system", "成功返回支持的文件类型: 类型数量=%d, 扩展名数量=%d",
-                    supportedTypes.size(), supportedExtensions.size());
-            monitor.end("获取支持的文件类型成功");
-
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            LogUtils.logBusinessError("GET_SUPPORTED_TYPES", "system", "获取支持的文件类型失败", e);
-            monitor.end("获取支持的文件类型失败: " + e.getMessage());
-            Map<String, Object> errorResponse = new HashMap<>();
-            errorResponse.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
-            errorResponse.put("message", "获取支持的文件类型失败: " + e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
-        }
+        // 2. 利用 Result.success 统一包装返回
+        return ResponseEntity.ok(Result.success("获取支持的文件类型成功", data));
     }
 
     /**
