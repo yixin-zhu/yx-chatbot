@@ -25,11 +25,12 @@ public class UserController {
     @Autowired
     private JwtUtils jwtUtils;
 
+    // 改进：用Service封装比较好吗？
     @Autowired
     private UserRepository userRepository;
 
     // 用户注册接口
-    // 接收用户请求体中的用户名和密码，并调用用户服务进行注册
+    // 接收用户请求体中的用户名和密码
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody UserRequest request) {
         // LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("USER_REGISTER");

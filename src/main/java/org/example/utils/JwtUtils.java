@@ -19,6 +19,10 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
+// JWT 工具类
+// 前置条件：引入 jjwt-api、jjwt-impl、jjwt-jackson 三个依赖
+// 3个核心功能：生成 Token、解析 Token、验证 Token
+// 被调用：UserService（登录时给token）, JwtAuthenticationFilter（检验token）
 @Component
 public class JwtUtils {
     private static final Logger logger = LoggerFactory.getLogger(JwtUtils.class);
@@ -26,10 +30,10 @@ public class JwtUtils {
     @Value("${jwt.secret-key}")
     private String secretKeyBase64; // 这里存的是 Base64 编码后的密钥
 
-    private static final long EXPIRATION_TIME = 3600000; // 1 hour (调整为1小时)
+    private static final long EXPIRATION_TIME = 36000000; // 10 hour
     private static final long REFRESH_TOKEN_EXPIRATION_TIME = 604800000; // 7 days (refresh token有效期)
-    private static final long REFRESH_THRESHOLD = 300000; // 5分钟：当剩余时间少于5分钟时开始刷新
-    private static final long REFRESH_WINDOW = 600000; // 10分钟：token过期后的宽限期
+    private static final long REFRESH_THRESHOLD = 3000000; // 50分钟：当剩余时间少于50分钟时开始刷新
+    private static final long REFRESH_WINDOW = 6000000; // 100分钟：token过期后可以刷新的宽限期
 
     @Autowired
     private UserRepository userRepository;
@@ -38,7 +42,7 @@ public class JwtUtils {
     private TokenCacheService tokenCacheService;
 
     /**
-     * 解析 Base64 密钥，并返回 SecretKey
+     * 解析 配置文件里的 Base64 编码的密钥，生成 真正的签名密钥
      */
     private SecretKey getSigningKey() {
         byte[] keyBytes = Base64.getDecoder().decode(secretKeyBase64);
@@ -46,35 +50,31 @@ public class JwtUtils {
     }
 
     /**
-     * 生成 JWT Token（集成Redis缓存）
+      核心函数：生成 JWT Token（集成Redis缓存）
      */
     public String generateToken(String username) {
-        SecretKey key = getSigningKey(); // 解析密钥
-
+        // 取得签名密钥
+        SecretKey key = getSigningKey();
         // 获取用户信息
         User user = userRepository.findByUsername(username)
                 .orElseThrow(() -> new RuntimeException("User not found"));
-
         // 生成唯一的tokenId
         String tokenId = generateTokenId();
         long expireTime = System.currentTimeMillis() + EXPIRATION_TIME;
-
         // 创建token内容
         Map<String, Object> claims = new HashMap<>();
         claims.put("tokenId", tokenId); // 添加tokenId用于Redis缓存
         claims.put("role", user.getRole().name());
         claims.put("userId", user.getId().toString()); // 添加用户ID到JWT
-
         // 添加组织标签信息
         if (user.getOrgTags() != null && !user.getOrgTags().isEmpty()) {
             claims.put("orgTags", user.getOrgTags());
         }
-
         // 添加主组织标签信息
         if (user.getPrimaryOrg() != null && !user.getPrimaryOrg().isEmpty()) {
             claims.put("primaryOrg", user.getPrimaryOrg());
         }
-
+        // 核心：生成JWT字符串
         String token = Jwts.builder()
                 .setClaims(claims)
                 .setSubject(username)
@@ -84,7 +84,6 @@ public class JwtUtils {
 
         // 缓存token信息到Redis
         tokenCacheService.cacheToken(tokenId, user.getId().toString(), username, expireTime);
-
         logger.info("Token generated and cached for user: {}, tokenId: {}", username, tokenId);
         return token;
     }
@@ -94,25 +93,22 @@ public class JwtUtils {
      */
     public boolean validateToken(String token) {
         try {
-            // 首先从JWT中提取tokenId（快速失败）
+            // 从JWT中提取tokenId。若没有tokenId，直接返回无效
             String tokenId = extractTokenIdFromToken(token);
             if (tokenId == null) {
                 logger.warn("Token does not contain tokenId");
                 return false;
             }
-
             // 检查Redis缓存中的token状态
             if (!tokenCacheService.isTokenValid(tokenId)) {
                 logger.debug("Token invalid in cache: {}", tokenId);
                 return false;
             }
-
             // Redis验证通过，再验证JWT签名（双重验证）
             Jwts.parserBuilder()
                     .setSigningKey(getSigningKey())
                     .build()
-                    .parseClaimsJws(token);
-
+                    .parseClaimsJws(token); // 这行代码完成三重验证：签名、格式、过期
             logger.debug("Token validation successful: {}", tokenId);
             return true;
         } catch (ExpiredJwtException e) {

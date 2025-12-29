@@ -1,11 +1,14 @@
 package org.example.controller;
+import org.example.annotation.LogAction;
 import org.example.entity.FileUpload;
 import org.example.entity.OrganizationTag;
+import org.example.exception.CustomException;
 import org.example.repository.FileUploadRepository;
 import org.example.repository.OrganizationTagRepository;
 import org.example.service.DocumentService;
 import org.example.utils.JwtUtils;
 import org.example.utils.LogUtils;
+import org.example.utils.Result;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
@@ -29,6 +32,7 @@ import java.util.stream.Collectors;
 /**
  * 文档控制器类，处理文档相关操作请求
  */
+// 大量使用try catch, 代码冗长，应该使用全局异常处理机制来简化
 @RestController
 @RequestMapping("/api/v1/documents")
 public class DocumentController {
@@ -55,56 +59,20 @@ public class DocumentController {
      */
     // 删除文档接口
     @DeleteMapping("/{fileMd5}")
+    @LogAction(value = "DocumentController", action = "deleteDocument")
     public ResponseEntity<?> deleteDocument(
             @PathVariable String fileMd5,
             @RequestAttribute("userId") String userId,
-            @RequestAttribute("role") String role) {
+            @RequestAttribute("role") String role){
 
-        LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("DELETE_DOCUMENT");
-        try {
-            LogUtils.logBusiness("DELETE_DOCUMENT", userId, "接收到删除文档请求: fileMd5=%s, role=%s", fileMd5, role);
+        // 查找数据库中文档记录
+        FileUpload file = fileUploadRepository.findByFileMd5AndUserId(fileMd5, userId)
+                .orElseThrow(() -> new CustomException("文档不存在", HttpStatus.NOT_FOUND));
 
-            // 获取文件信息
-            Optional<FileUpload> fileOpt = fileUploadRepository.findByFileMd5AndUserId(fileMd5, userId);
-            if (fileOpt.isEmpty()) {
-                LogUtils.logUserOperation(userId, "DELETE_DOCUMENT", fileMd5, "FAILED_NOT_FOUND");
-                monitor.end("删除失败：文档不存在");
-                Map<String, Object> response = new HashMap<>();
-                response.put("code", HttpStatus.NOT_FOUND.value());
-                response.put("message", "文档不存在");
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(response);
-            }
+        // 核心：执行删除操作.权限在service层校验
+        documentService.deleteDocument(fileMd5, userId, role);
 
-            FileUpload file = fileOpt.get();
-
-            // 权限检查：只有文件所有者或管理员可以删除
-            if (!file.getUserId().equals(userId) && !"ADMIN".equals(role)) {
-                LogUtils.logUserOperation(userId, "DELETE_DOCUMENT", fileMd5, "FAILED_PERMISSION_DENIED");
-                LogUtils.logBusiness("DELETE_DOCUMENT", userId, "用户无权删除文档: fileMd5=%s, fileOwner=%s", fileMd5, file.getUserId());
-                monitor.end("删除失败：权限不足");
-                Map<String, Object> response = new HashMap<>();
-                response.put("code", HttpStatus.FORBIDDEN.value());
-                response.put("message", "没有权限删除此文档");
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(response);
-            }
-
-            // 执行删除操作
-            documentService.deleteDocument(fileMd5, userId);
-
-            LogUtils.logFileOperation(userId, "DELETE", file.getFileName(), fileMd5, "SUCCESS");
-            monitor.end("文档删除成功");
-            Map<String, Object> response = new HashMap<>();
-            response.put("code", 200);
-            response.put("message", "文档删除成功");
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            LogUtils.logBusinessError("DELETE_DOCUMENT", userId, "删除文档失败: fileMd5=%s", e, fileMd5);
-            monitor.end("删除失败: " + e.getMessage());
-            Map<String, Object> response = new HashMap<>();
-            response.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
-            response.put("message", "删除文档失败: " + e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
-        }
+        return ResponseEntity.ok(Result.success("文档删除成功", null));
     }
 
     /**
@@ -330,6 +298,7 @@ public class DocumentController {
      * @param token JWT token (URL参数，用于向后兼容)
      * @return 文件预览内容或错误响应
      */
+    // 由controller解析token不是很优雅，正确做法是通过filter解析token并设置SecurityContext
     @GetMapping("/preview")
     public ResponseEntity<?> previewFileByName(
             @RequestParam String fileName,
@@ -349,6 +318,7 @@ public class DocumentController {
                     UserDetails userDetails = (UserDetails) authentication.getPrincipal();
                     userId = userDetails.getUsername();
                     // 从userDetails中获取组织标签信息
+                    // 只取得第一个角色作为orgTag示例，实际应用中可能需要调整?
                     orgTags = userDetails.getAuthorities().stream()
                             .map(auth -> auth.getAuthority().replace("ROLE_", ""))
                             .findFirst()

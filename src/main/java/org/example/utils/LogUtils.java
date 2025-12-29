@@ -12,10 +12,8 @@ public class LogUtils {
 
     // 业务日志记录器
     private static final Logger BUSINESS_LOGGER = LoggerFactory.getLogger("org.example.business");
-
     // 性能日志记录器
     private static final Logger PERFORMANCE_LOGGER = LoggerFactory.getLogger("org.example.performance");
-
     // MDC键名常量
     public static final String USER_ID = "userId";
     public static final String REQUEST_ID = "requestId";

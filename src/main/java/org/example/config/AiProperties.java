@@ -3,14 +3,13 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
-/**
- * 全局 AI 相关配置，包含 Prompt 模板和生成参数。
- */
+
+// 全局 AI 相关配置，包含 Prompt 模板和生成参数。
 @Component
 @ConfigurationProperties(prefix = "ai")
 @Data
 public class AiProperties {
-
+    // 两个子配置类
     private Prompt prompt = new Prompt();
     private Generation generation = new Generation();
 

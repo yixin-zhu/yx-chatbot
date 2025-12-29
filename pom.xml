@@ -57,6 +57,7 @@
             <artifactId>spring-boot-starter-webflux</artifactId>
         </dependency>
 
+
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
@@ -192,6 +193,11 @@
             <groupId>ai.z.openapi</groupId>
             <artifactId>zai-sdk</artifactId>
             <version>0.0.6</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
         </dependency>
 
     </dependencies>

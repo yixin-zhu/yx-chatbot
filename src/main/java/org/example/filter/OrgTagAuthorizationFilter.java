@@ -6,6 +6,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.example.entity.FileUpload;
 import org.example.repository.FileUploadRepository;
 import org.example.utils.JwtUtils;
+import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,10 +18,11 @@ import java.util.Arrays;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
-
+import org.springframework.util.AntPathMatcher;
+import org.springframework.web.util.UrlPathHelper;
+import java.util.Map;
 /**
  * 组织标签授权过滤器
- * 用于实现基于组织标签的数据访问控制
  * 支持多级访问控制：
  * 1. 用户私人空间：仅资源创建者可访问
  * 2. 组织资源：组织成员可访问
@@ -43,12 +45,16 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
     private static final String DEFAULT_ORG_TAG = "DEFAULT"; // 默认组织标签
     private static final String PRIVATE_TAG_PREFIX = "PRIVATE_"; // 私人组织标签前缀
 
+    private final AntPathMatcher pathMatcher = new AntPathMatcher();
+    private final UrlPathHelper urlPathHelper = new UrlPathHelper();
+
     @Autowired
     private JwtUtils jwtUtils;
 
     @Autowired
     private FileUploadRepository fileUploadRepository;
 
+    // 核心函数
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
@@ -63,23 +69,13 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                     path.matches(".*/documents/uploads.*") ||
                     path.matches(".*/search/hybrid.*") ||
                     (path.matches(".*/documents/[a-fA-F0-9]{32}.*") && "DELETE".equals(request.getMethod()))) {
-
-                String operation = "未知操作";
-                if (path.contains("/chunk")) {
-                    operation = "分片上传";
-                } else if (path.contains("/merge")) {
-                    operation = "合并分片";
-                } else if (path.contains("/uploads")) {
-                    operation = "获取用户文档";
-                } else if (path.contains("/search/hybrid")) {
-                    operation = "混合检索";
-                } else if ("DELETE".equals(request.getMethod()) && path.matches(".*/documents/[a-fA-F0-9]{32}.*")) {
-                    operation = "删除文档";
-                }
-
-                logger.info("处理{}请求: {}", operation, path);
+                // 提取操作类型名称
+                String operation = getOperation(request, path);
+                logger.info("orgfilter: 处理{}请求: {}", operation, path);
 
                 // 将用户ID和角色设置为请求属性，供控制器方法使用
+                // controller通过@RequestAttribute("userId")获取用户ID
+                // controller更高级的做法是从SecurityContextHolder获取Authentication对象
                 String token = extractToken(request);
                 if (token != null) {
                     String userId = jwtUtils.extractUserIdFromToken(token);
@@ -112,7 +108,7 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                 return;
             }
 
-            // 获取资源的组织标签
+            // 获取资源的组织标签，从数据库中查询得到
             ResourceInfo resourceInfo = getResourceInfo(resourceId);
 
             // 如果是分片上传并且资源未找到(首次上传)，允许请求通过
@@ -149,7 +145,7 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
                 return;
             }
 
-            // 获取用户名和角色
+            // 从token获取用户名和角色
             String username = jwtUtils.extractUsernameFromToken(token);
             String role = jwtUtils.extractRoleFromToken(token);
 
@@ -169,7 +165,7 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
 
             // 检查是否为私人组织标签资源
             if (resourceOrgTag.startsWith(PRIVATE_TAG_PREFIX)) {
-                // 私人标签资源只允许拥有者访问，此处已排除拥有者和管理员，拒绝访问
+                // 私人标签资源只允许拥有者访问，之前已排除拥有者和管理员，这里拒绝访问
                 logger.debug("私人资源，且用户不是拥有者或管理员，拒绝访问");
                 response.setStatus(HttpServletResponse.SC_FORBIDDEN);
                 return;
@@ -184,6 +180,7 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
             }
 
             // 检查用户是否有权限访问该资源
+            // 用户的组织标签是逗号分隔的字符串，转化为集合，检查是否包含资源的组织标签
             if (isUserAuthorized(userOrgTags, resourceOrgTag)) {
                 logger.debug("用户有访问权限，放行请求");
                 filterChain.doFilter(request, response);
@@ -195,6 +192,23 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
             logger.error("组织标签授权过滤器发生错误: {}", e.getMessage(), e);
             response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
         }
+    }
+
+    @NotNull
+    private static String getOperation(HttpServletRequest request, String path) {
+        String operation = "未知操作";
+        if (path.contains("/chunk")) {
+            operation = "分片上传";
+        } else if (path.contains("/merge")) {
+            operation = "合并分片";
+        } else if (path.contains("/uploads")) {
+            operation = "获取用户文档";
+        } else if (path.contains("/search/hybrid")) {
+            operation = "混合检索";
+        } else if ("DELETE".equals(request.getMethod()) && path.matches(".*/documents/[a-fA-F0-9]{32}.*")) {
+            operation = "删除文档";
+        }
+        return operation;
     }
 
     /**
@@ -246,7 +260,7 @@ public class OrgTagAuthorizationFilter extends OncePerRequestFilter {
 
     /**
      * 获取资源信息
-     * 实际项目中应该根据不同资源类型查询对应的数据库表
+     * 根据不同资源类型查询对应的数据库表
      */
     private ResourceInfo getResourceInfo(String resourceId) {
         if (resourceId == null) {
