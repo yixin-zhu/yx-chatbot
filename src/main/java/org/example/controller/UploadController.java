@@ -1,5 +1,7 @@
 package org.example.controller;
+import org.example.DTO.ChunkUploadDTO;
 import org.example.DTO.FileProcessingTask;
+import org.example.annotation.LogAction;
 import org.example.entity.FileUpload;
 import org.example.repository.FileUploadRepository;
 import org.example.service.FileProcessingService;
@@ -7,6 +9,7 @@ import org.example.service.FileTypeValidationService;
 import org.example.service.UploadService;
 import org.example.service.UserService;
 import org.example.utils.LogUtils;
+import org.example.utils.Result;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -43,175 +46,31 @@ public class UploadController {
 
     /**
      * 上传文件分片接口
-     *
-     * @param fileMd5 文件的MD5值，用于唯一标识文件
-     * @param chunkIndex 分片索引，表示当前分片的位置
-     * @param totalSize 文件总大小
-     * @param fileName 文件名
-     * @param totalChunks 总分片数量
-     * @param orgTag 组织标签，如果未指定则使用用户的主组织标签
-     * @param isPublic 是否公开，默认为false
-     * @param file 分片文件对象
-     * @return 返回包含已上传分片和上传进度的响应
-     * @throws IOException 当文件读写发生错误时抛出
      */
     // 把文件上传到MinIO，然后记录分片信息到数据库
     // 分片上传接口
     @PostMapping("/chunk")
-    public ResponseEntity<Map<String, Object>> uploadChunk(
-            @RequestParam("fileMd5") String fileMd5,
-            @RequestParam("chunkIndex") int chunkIndex,
-            @RequestParam("totalSize") long totalSize,
-            @RequestParam("fileName") String fileName,
-            @RequestParam(value = "totalChunks", required = false) Integer totalChunks,
-            @RequestParam(value = "orgTag", required = false) String orgTag,
-            @RequestParam(value = "isPublic", required = false, defaultValue = "false") boolean isPublic,
+    @LogAction(value = "UploadController", action = "uploadChunk")
+    public ResponseEntity<?> uploadChunk(
+            @ModelAttribute ChunkUploadDTO dto,
             @RequestParam("file") MultipartFile file,
             @RequestAttribute("userId") String userId) throws IOException {
 
-        LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("UPLOAD_CHUNK");
-        try {
-            // 文件类型验证（仅在第一个分片时进行验证）,调用FileTypeValidationService的validateFileType方法
-            if (chunkIndex == 0) {
-                FileTypeValidationService.FileTypeValidationResult validationResult =
-                        fileTypeValidationService.validateFileType(fileName);
-
-                LogUtils.logBusiness("UPLOAD_CHUNK", userId, "文件类型验证结果: fileName=%s, valid=%s, fileType=%s, message=%s",
-                        fileName, validationResult.isValid(), validationResult.getFileType(), validationResult.getMessage());
-
-                if (!validationResult.isValid()) {
-                    LogUtils.logBusinessError("UPLOAD_CHUNK", userId, "文件类型验证失败: fileName=%s, fileType=%s",
-                            new RuntimeException(validationResult.getMessage()), fileName, validationResult.getFileType());
-                    monitor.end("文件类型验证失败: " + validationResult.getMessage());
-
-                    Map<String, Object> errorResponse = new HashMap<>();
-                    errorResponse.put("code", HttpStatus.BAD_REQUEST.value());
-                    errorResponse.put("message", validationResult.getMessage());
-                    errorResponse.put("fileType", validationResult.getFileType());
-                    errorResponse.put("supportedTypes", fileTypeValidationService.getSupportedFileTypes());
-                    return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
-                }
-            }
-
-            String fileType = getFileType(fileName);
-            String contentType = file.getContentType();
-
-            LogUtils.logBusiness("UPLOAD_CHUNK", userId, "接收到分片上传请求: fileMd5=%s, chunkIndex=%d, fileName=%s, fileType=%s, contentType=%s, fileSize=%d, totalSize=%d, orgTag=%s, isPublic=%s",
-                    fileMd5, chunkIndex, fileName, fileType, contentType, file.getSize(), totalSize, orgTag, isPublic);
-
-            // 如果未指定组织标签，则获取用户的主组织标签指定为组织标签
-            if (orgTag == null || orgTag.isEmpty()) {
-                try {
-                    LogUtils.logBusiness("UPLOAD_CHUNK", userId, "组织标签未指定，尝试获取用户主组织标签: fileName=%s", fileName);
-                    String primaryOrg = userService.getUserPrimaryOrg(userId);
-                    orgTag = primaryOrg;
-                    LogUtils.logBusiness("UPLOAD_CHUNK", userId, "成功获取用户主组织标签: fileName=%s, orgTag=%s", fileName, orgTag);
-                } catch (Exception e) {
-                    LogUtils.logBusinessError("UPLOAD_CHUNK", userId, "获取用户主组织标签失败: fileName=%s", e, fileName);
-                    monitor.end("获取主组织标签失败: " + e.getMessage());
-                    Map<String, Object> errorResponse = new HashMap<>();
-                    errorResponse.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
-                    errorResponse.put("message", "获取用户主组织标签失败: " + e.getMessage());
-                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
-                }
-            }
-
-            LogUtils.logFileOperation(userId, "UPLOAD_CHUNK", fileName, fileMd5, "PROCESSING");
-
-            // 核心步骤
-            uploadService.uploadChunk(fileMd5, chunkIndex, totalSize, fileName, file, orgTag, isPublic, userId);
-
-            // 计算上传进度，需要用到Redis 的 BitMap, 从其中获取已上传的分片列表
-            List<Integer> uploadedChunks = uploadService.getUploadedChunks(fileMd5, userId);
-            int actualTotalChunks = uploadService.getTotalChunks(fileMd5, userId);
-            // 作简单的除法，计算进度
-            double progress = calculateProgress(uploadedChunks, actualTotalChunks);
-
-            LogUtils.logBusiness("UPLOAD_CHUNK", userId, "分片上传成功: fileMd5=%s, fileName=%s, fileType=%s, chunkIndex=%d, 进度=%.2f%%",
-                    fileMd5, fileName, fileType, chunkIndex, progress);
-            monitor.end("分片上传成功");
-
-            // 构建返回数据对象
-            Map<String, Object> data = new HashMap<>();
-            data.put("uploaded", uploadedChunks);
-            data.put("progress", progress);
-
-            // 构建统一响应格式
-            Map<String, Object> response = new HashMap<>();
-            response.put("code", 200);
-            response.put("message", "分片上传成功");
-            response.put("data", data);
-
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            String fileType = getFileType(fileName);
-            LogUtils.logBusinessError("UPLOAD_CHUNK", userId, "分片上传失败: fileMd5=%s, fileName=%s, fileType=%s, chunkIndex=%d", e, fileMd5, fileName, fileType, chunkIndex);
-            monitor.end("分片上传失败: " + e.getMessage());
-            Map<String, Object> errorResponse = new HashMap<>();
-            errorResponse.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
-            errorResponse.put("message", "分片上传失败: " + e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
-        }
+        Map<String, Object> uploadStats = uploadService.processChunkUpload(dto, file, userId);
+        return ResponseEntity.ok(Result.success("分片上传成功", uploadStats));
     }
 
     /**
      * 获取文件上传状态接口
-     *
-     * @param fileMd5 文件的MD5值，用于唯一标识文件
-     * @return 返回包含已上传分片和上传进度的响应
      */
     // 查询上传状态接口
     @GetMapping("/status")
-    public ResponseEntity<Map<String, Object>> getUploadStatus(@RequestParam("file_md5") String fileMd5,
+    @LogAction(value = "UploadController", action = "getUploadStatus")
+    public ResponseEntity<?> getUploadStatus(@RequestParam("file_md5") String fileMd5,
                                                                @RequestAttribute("userId") String userId) {
-        LogUtils.PerformanceMonitor monitor = LogUtils.startPerformanceMonitor("GET_UPLOAD_STATUS");
-        try {
-            // 获取文件信息
-            String fileName = "unknown";
-            String fileType = "unknown";
-            try {
-                Optional<FileUpload> fileUpload = fileUploadRepository.findByFileMd5(fileMd5);
-                if (fileUpload.isPresent()) {
-                    fileName = fileUpload.get().getFileName();
-                    fileType = getFileType(fileName);
-                }
-            } catch (Exception e) {
-                // 获取文件信息失败不影响状态查询，继续处理
-                LogUtils.logBusiness("GET_UPLOAD_STATUS", "system", "获取文件信息失败，使用默认值: fileMd5=%s, 错误=%s", fileMd5, e.getMessage());
-            }
+        Map<String, Object> statusData = uploadService.getUploadStatus(fileMd5, userId);
 
-            LogUtils.logBusiness("GET_UPLOAD_STATUS", "system", "获取文件上传状态: fileMd5=%s, fileName=%s, fileType=%s", fileMd5, fileName, fileType);
-
-            List<Integer> uploadedChunks = uploadService.getUploadedChunks(fileMd5, userId);
-            int totalChunks = uploadService.getTotalChunks(fileMd5, userId);
-            double progress = calculateProgress(uploadedChunks, totalChunks);
-
-            LogUtils.logBusiness("GET_UPLOAD_STATUS", "system", "文件上传状态: fileMd5=%s, fileName=%s, fileType=%s, 已上传=%d/%d, 进度=%.2f%%",
-                    fileMd5, fileName, fileType, uploadedChunks.size(), totalChunks, progress);
-            monitor.end("获取上传状态成功");
-
-            // 构建数据对象
-            Map<String, Object> data = new HashMap<>();
-            data.put("uploaded", uploadedChunks);
-            data.put("progress", progress);
-            data.put("fileName", fileName);
-            data.put("fileType", fileType);
-
-            // 构建统一响应格式
-            Map<String, Object> response = new HashMap<>();
-            response.put("code", 200);
-            response.put("message", "获取上传状态成功");
-            response.put("data", data);
-
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            LogUtils.logBusinessError("GET_UPLOAD_STATUS", "system", "获取文件上传状态失败: fileMd5=%s", e, fileMd5);
-            monitor.end("获取上传状态失败: " + e.getMessage());
-            Map<String, Object> errorResponse = new HashMap<>();
-            errorResponse.put("code", HttpStatus.INTERNAL_SERVER_ERROR.value());
-            errorResponse.put("message", "获取上传状态失败: " + e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
-        }
+        return ResponseEntity.ok(Result.success("获取上传状态成功", statusData));
     }
 
     /**
