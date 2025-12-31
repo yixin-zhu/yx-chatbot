@@ -29,4 +29,8 @@ public class FileProcessingTask {
         this.orgTag = "DEFAULT";
         this.isPublic = false;
     }
+
+    public boolean isPublic() {
+        return isPublic;
+    }
 }

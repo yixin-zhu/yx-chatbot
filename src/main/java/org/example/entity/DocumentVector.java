@@ -7,6 +7,8 @@ import lombok.Data;
 /**
  * 文档向量实体类
  * 用于存储文本分块和相关元数据
+ * 注意：不存储实际向量数据
+ * 实际向量数据存储在EsDocument中
  */
 @Data
 @Entity

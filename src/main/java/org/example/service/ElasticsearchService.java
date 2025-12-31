@@ -6,12 +6,19 @@ import co.elastic.clients.elasticsearch.core.BulkResponse;
 import co.elastic.clients.elasticsearch.core.DeleteByQueryRequest;
 import co.elastic.clients.elasticsearch.core.bulk.BulkOperation;
 import co.elastic.clients.elasticsearch.core.bulk.BulkResponseItem;
+import co.elastic.clients.transport.endpoints.BooleanResponse;
 import org.example.DTO.EsDocument;
+import org.example.exception.CustomException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.List;
 
 // Elasticsearch服务
@@ -20,9 +27,13 @@ public class ElasticsearchService {
 
     private static final Logger logger = LoggerFactory.getLogger(ElasticsearchService.class);
 
-    //
     @Autowired
     private ElasticsearchClient esClient;
+
+    private static final String INDEX_NAME = "knowledge_base";
+
+    @Value("${embedding.api.dimension:2048}") // 从配置中读取维度，必须与模型输出一致
+    private int dimension;
 
     /**
      * 批量索引文档到Elasticsearch中
@@ -32,14 +43,15 @@ public class ElasticsearchService {
      * @param documents 文档列表，每个文档都将被索引到Elasticsearch中
      */
     public void bulkIndex(List<EsDocument> documents) {
+        logger.info("开始批量索引文档到Elasticsearch，文档数量: {}", documents.size());
         try {
-            logger.info("开始批量索引文档到Elasticsearch，文档数量: {}", documents.size());
 
+            ensureIndexExists();
             // 将文档列表转换为批量操作列表，每个文档都对应一个索引操作
             List<BulkOperation> bulkOperations = documents.stream()
                     .map(doc -> BulkOperation.of(op -> op.index(idx -> idx
-                            .index("knowledge_base") // 指定索引名称
-                            .id(doc.getId()) // 使用文档的ID作为Elasticsearch中的文档ID
+                            .index(INDEX_NAME) // 指定索引名称
+                            .id(doc.getFileMd5() + "_" + doc.getChunkId()) // 使用文档的ID作为Elasticsearch中的文档ID
                             .document(doc) // 将文档对象作为数据源
                     )))
                     .toList();
@@ -52,20 +64,39 @@ public class ElasticsearchService {
 
             // 检查响应结果
             if (response.errors()) {
-                logger.error("批量索引过程中发生错误:");
-                for (BulkResponseItem item : response.items()) {
-                    if (item.error() != null) {
-                        logger.error("文档索引失败 - ID: {}, 错误: {}", item.id(), item.error().reason());
-                    }
-                }
-                throw new RuntimeException("批量索引部分失败，请检查日志");
+                response.items().stream()
+                        .filter(item -> item.error() != null)
+                        .forEach(item -> logger.error("文档 {} 索引失败: {}", item.id(), item.error().reason()));
+                throw new CustomException("批量索引部分失败，请检查日志", HttpStatus.INTERNAL_SERVER_ERROR);
             } else {
                 logger.info("批量索引成功完成，文档数量: {}", documents.size());
             }
         } catch (Exception e) {
             logger.error("批量索引失败，文档数量: {}", documents.size(), e);
-            // 如果发生异常，抛出运行时异常，表明批量索引失败
             throw new RuntimeException("批量索引失败", e);
+        }
+    }
+
+    /**
+     * 确保索引存在，并配置 dense_vector 映射
+     */
+    private void ensureIndexExists() throws IOException {
+        BooleanResponse exists = esClient.indices().exists(e -> e.index(INDEX_NAME));
+
+        if (!exists.value()) {
+            logger.info("索引 {} 不存在，正在从 knowledge_base.json 加载配置创建索引...", INDEX_NAME);
+
+            // 1. 从 resources 加载 JSON 文件
+            ClassPathResource resource = new ClassPathResource("es-mappings/knowledge_base.json");
+            try (InputStream is = resource.getInputStream()) {
+                // 2. 将 InputStream 转换为 ES 能够理解的 JsonData 或直接作为请求体
+                // 注意：Java Client 8.x 支持通过 Source 直接创建
+                esClient.indices().create(c -> c
+                        .index(INDEX_NAME)
+                        .withJson(is) // 核心：直接加载 JSON 内容
+                );
+            }
+            logger.info("索引 {} 创建成功", INDEX_NAME);
         }
     }
 

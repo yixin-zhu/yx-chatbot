@@ -3,8 +3,12 @@ import io.minio.MinioClient;
 import io.minio.errors.*;
 import lombok.extern.slf4j.Slf4j;
 import org.example.DTO.FileProcessingTask;
+import org.example.exception.CustomException;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.*;
 import java.net.HttpURLConnection;
@@ -26,48 +30,44 @@ public class FileProcessingService {
         this.vectorizationService = vectorizationService;
     }
 
+    @Async
+    @Transactional
     public void processTask(FileProcessingTask task) {
-        log.info("Received task: {}", task);
-        log.info("文件权限信息: userId={}, orgTag={}, isPublic={}",
-                task.getUserId(), task.getOrgTag(), task.isPublic());
+        log.info("开始处理文件解析与向量化任务 => fileMd5: {}, userId: {}", task.getFileMd5(), task.getUserId());
 
-        InputStream fileStream = null;
-        try {
-            // 下载文件
-            fileStream = downloadFileFromStorage(task.getFilePath());
-            // 在 downloadFileFromStorage 返回后立即检查流是否可读
-            if (fileStream == null) {
-                throw new IOException("流为空");
-            }
+        // 使用 Try-with-resources 自动关闭 InputStream
+        try (InputStream fileStream = downloadFileFromStorage(task.getFilePath())) {
 
-            // 强制转换为可缓存流
-            if (!fileStream.markSupported()) {
-                fileStream = new BufferedInputStream(fileStream);
-            }
+            // 1. 校验流是否合法
+            InputStream processedStream = wrapAsBuffered(fileStream);
 
-            // 解析文件
-            parseService.parseAndSave(task.getFileMd5(), fileStream,
+            // 2. 核心：调用parse service 解析文件并保存
+            parseService.parseAndSave(task.getFileMd5(), processedStream,
                     task.getUserId(), task.getOrgTag(), task.isPublic());
-            log.info("文件解析完成，fileMd5: {}", task.getFileMd5());
 
-            // 向量化处理
+            // 3. 向量化处理
             vectorizationService.vectorize(task.getFileMd5(),
                     task.getUserId(), task.getOrgTag(), task.isPublic());
-            log.info("向量化完成，fileMd5: {}", task.getFileMd5());
+
+            log.info("文件后续处理全部完成 => fileMd5: {}", task.getFileMd5());
+
+        } catch (IOException e) {
+            throw new CustomException("文件流下载或处理异常: " + e.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
         } catch (Exception e) {
-            log.error("Error processing task: {}", task, e);
-            // 抛出异常
-            throw new RuntimeException("Error processing task", e);
-        } finally {
-            // 确保关闭输入流
-            if (fileStream != null) {
-                try {
-                    fileStream.close();
-                } catch (IOException e) {
-                    log.error("Error closing file stream", e);
-                }
-            }
+            // 这里的 Exception 用来捕获解析和向量化过程中的业务异常
+            log.error("处理任务失败: fileMd5={}", task.getFileMd5(), e);
+            throw new CustomException("任务处理中断: " + e.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
         }
+    }
+
+    /**
+     * 内部辅助：将流包装为可标记/缓冲流
+     */
+    private InputStream wrapAsBuffered(InputStream inputStream) throws IOException {
+        if (inputStream == null) {
+            throw new IOException("无法从存储中获取文件流");
+        }
+        return inputStream.markSupported() ? inputStream : new BufferedInputStream(inputStream);
     }
 
     /**

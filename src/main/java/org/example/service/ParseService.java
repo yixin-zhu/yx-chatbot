@@ -5,20 +5,27 @@ import org.apache.tika.parser.ParseContext;
 import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.sax.BodyContentHandler;
 import org.example.entity.DocumentVector;
+import org.example.exception.CustomException;
 import org.example.repository.DocumentVectorRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.xml.sax.SAXException;
 
 import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+
 import com.hankcs.hanlp.seg.common.Term;
 import com.hankcs.hanlp.tokenizer.StandardTokenizer;
 
+// 负责文件解析与分块存储的服务
+// 向下调用 VectorizationService 进行向量化处理
 @Service
 public class ParseService {
 
@@ -56,31 +63,30 @@ public class ParseService {
      * @throws TikaException 如果文件解析过程中发生错误
      */
     public void parseAndSave(String fileMd5, InputStream fileStream,
-                             String userId, String orgTag, boolean isPublic) throws IOException, TikaException {
+                             String userId, String orgTag, boolean isPublic){
         logger.info("开始流式解析文件，fileMd5: {}, userId: {}, orgTag: {}, isPublic: {}",
                 fileMd5, userId, orgTag, isPublic);
 
-        // 检查内存使用情况，防止OOM
-        // 当内存使用过高(大于80%)时，触发垃圾回收，若仍然过高则抛出异常
-        checkMemoryThreshold();
+        // 1. 初始化 Tika 组件
+        // 注意：AutoDetectParser 和 ParseContext 可以配置为单例或重用，以提升性能
+        AutoDetectParser parser = new AutoDetectParser();
+        Metadata metadata = new Metadata();
+        ParseContext context = new ParseContext();
 
-        try (BufferedInputStream bufferedStream = new BufferedInputStream(fileStream, bufferSize)) {
-            // 创建一个流式处理器，它会在内部处理父块的切分和子块的保存
-            StreamingContentHandler handler = new StreamingContentHandler(fileMd5, userId, orgTag, isPublic);
-            Metadata metadata = new Metadata();
-            ParseContext context = new ParseContext();
-            AutoDetectParser parser = new AutoDetectParser();
+        // 2. 使用专门的 Handler 处理解析流
+        // 该 Handler 负责将大文本切分为 Chunk 并存入数据库
+        StreamingContentHandler handler = new StreamingContentHandler(fileMd5, userId, orgTag, isPublic);
 
-            // Tika的parse方法会驱动整个流式处理过程
-            // 当handler的characters方法接收到足够数据时，会触发分块、切片和保存
-            parser.parse(bufferedStream, handler, metadata, context);
+        try {
+            // 3. 执行解析
+            // Tika 会一边读取流，一边通过回调触发 handler 的内容处理
+            parser.parse(fileStream, handler, metadata, context);
 
-            logger.info("文件流式解析和入库完成，fileMd5: {}", fileMd5);
-
-        } catch (SAXException e) {
-            logger.error("文档解析失败，fileMd5: {}", fileMd5, e);
-            throw new RuntimeException("文档解析失败", e);
+        } catch (SAXException | TikaException | IOException e) {
+            logger.error("Tika 解析过程中发生崩溃 => fileMd5: {}, 错误: {}", fileMd5, e.getMessage());
+            throw new CustomException("文件解析失败: " + e.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
         }
+
     }
 
     /**
@@ -91,29 +97,6 @@ public class ParseService {
         parseAndSave(fileMd5, fileStream, "unknown", "DEFAULT", false);
     }
 
-    private void checkMemoryThreshold() {
-        Runtime runtime = Runtime.getRuntime();
-        long maxMemory = runtime.maxMemory();
-        long totalMemory = runtime.totalMemory();
-        long freeMemory = runtime.freeMemory();
-        long usedMemory = totalMemory - freeMemory;
-
-        double memoryUsage = (double) usedMemory / maxMemory;
-
-        if (memoryUsage > maxMemoryThreshold) {
-            logger.warn("内存使用率过高: {:.2f}%, 触发垃圾回收", memoryUsage * 100);
-            System.gc();
-
-            // 重新检查
-            usedMemory = runtime.totalMemory() - runtime.freeMemory();
-            memoryUsage = (double) usedMemory / maxMemory;
-
-            if (memoryUsage > maxMemoryThreshold) {
-                throw new RuntimeException("内存不足，无法处理大文件。当前使用率: " +
-                        String.format("%.2f%%", memoryUsage * 100));
-            }
-        }
-    }
 
     /**
      * 内部流式内容处理器，实现了父子文档切分策略的核心逻辑。
@@ -126,7 +109,7 @@ public class ParseService {
         private final String userId;
         private final String orgTag;
         private final boolean isPublic;
-        private int savedChunkCount = 0;
+        private final AtomicInteger chunkCounter = new AtomicInteger(0);
 
         public StreamingContentHandler(String fileMd5, String userId, String orgTag, boolean isPublic) {
             super(-1); // 禁用Tika的内部写入限制，我们自己管理缓冲区
@@ -154,46 +137,42 @@ public class ParseService {
 
         private void processParentChunk() {
             String parentChunkText = buffer.toString();
-            logger.debug("处理父文本块，大小: {} bytes", parentChunkText.length());
 
             // 1. 将父块分割成更小的、有语义的子切片
-            List<String> childChunks = ParseService.this.splitTextIntoChunksWithSemantics(parentChunkText, chunkSize);
+            String cleanedText = parentChunkText.replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]", "")
+                    .replaceAll("\\s+", " ");
+            List<String> childChunks = ParseService.this.splitTextIntoChunksWithSemantics(cleanedText, chunkSize);
 
-            // 2. 将子切片批量保存到数据库
-            this.savedChunkCount = ParseService.this.saveChildChunks(fileMd5, childChunks, userId, orgTag, isPublic, this.savedChunkCount);
+
+            // 2. 批量保存（核心性能改进点！）
+            saveChildChunksBatch(fileMd5, childChunks, userId, orgTag, isPublic, chunkCounter);
 
             // 3. 清空缓冲区，为下一个父块做准备
             buffer.setLength(0);
         }
+
+
     }
 
-    /**
-     * 将子切片列表保存到数据库。
-     *
-     * @param fileMd5         文件的 MD5 哈希值
-     * @param chunks          子切片文本列表
-     * @param userId          上传用户ID
-     * @param orgTag          组织标签
-     * @param isPublic        是否公开
-     * @param startingChunkId 当前批次的起始分片ID
-     * @return 保存后总的分片数量
-     */
-    private int saveChildChunks(String fileMd5, List<String> chunks,
-                                String userId, String orgTag, boolean isPublic, int startingChunkId) {
-        int currentChunkId = startingChunkId;
-        for (String chunk : chunks) {
-            currentChunkId++;
-            var vector = new DocumentVector();
-            vector.setFileMd5(fileMd5);
-            vector.setChunkId(currentChunkId);
-            vector.setTextContent(chunk);
-            vector.setUserId(userId);
-            vector.setOrgTag(orgTag);
-            vector.setPublic(isPublic);
-            documentVectorRepository.save(vector);
-        }
-        logger.info("成功保存 {} 个子切片到数据库", chunks.size());
-        return currentChunkId;
+
+    private void saveChildChunksBatch(String fileMd5, List<String> chunks,
+                                String userId, String orgTag, boolean isPublic, AtomicInteger chunkCounter) {
+        // 转换为实体对象列表
+        List<DocumentVector> vectors = chunks.stream().map(text -> {
+            DocumentVector v = new DocumentVector();
+            v.setFileMd5(fileMd5);
+            v.setChunkId(chunkCounter.incrementAndGet()); // 自动增长 ID
+            v.setTextContent(text);
+            v.setUserId(userId);
+            v.setOrgTag(orgTag);
+            v.setPublic(isPublic);
+            return v;
+        }).collect(Collectors.toList());
+
+        // 使用 saveAll 代替循环 save。
+        // 注意：需要在 application.yml 开启 spring.jpa.properties.hibernate.jdbc.batch_size=50
+        documentVectorRepository.saveAll(vectors);
+        logger.info("Batch saved {} chunks for file: {}", chunks.size(), fileMd5);
     }
 
     /**
@@ -201,12 +180,9 @@ public class ParseService {
      */
     private List<String> splitTextIntoChunksWithSemantics(String text, int chunkSize) {
         List<String> chunks = new ArrayList<>();
-
         // 按段落分割
         String[] paragraphs = text.split("\n\n+");
-
         StringBuilder currentChunk = new StringBuilder();
-
         for (String paragraph : paragraphs) {
             // 如果单个段落超过chunk大小，需要进一步分割
             if (paragraph.length() > chunkSize) {
@@ -215,7 +191,6 @@ public class ParseService {
                     chunks.add(currentChunk.toString().trim());
                     currentChunk = new StringBuilder();
                 }
-
                 // 按句子分割长段落
                 List<String> sentenceChunks = splitLongParagraph(paragraph, chunkSize);
                 chunks.addAll(sentenceChunks);
@@ -223,7 +198,7 @@ public class ParseService {
             // 如果添加这个段落会超过chunk大小
             else if (currentChunk.length() + paragraph.length() > chunkSize) {
                 // 保存当前chunk
-                if (currentChunk.length() > 0) {
+                if (!currentChunk.isEmpty()) {
                     chunks.add(currentChunk.toString().trim());
                 }
                 // 开始新chunk
@@ -231,15 +206,14 @@ public class ParseService {
             }
             // 可以添加到当前chunk
             else {
-                if (currentChunk.length() > 0) {
+                if (!currentChunk.isEmpty()) {
                     currentChunk.append("\n\n");
                 }
                 currentChunk.append(paragraph);
             }
         }
-
         // 添加最后一个chunk
-        if (currentChunk.length() > 0) {
+        if (!currentChunk.isEmpty()) {
             chunks.add(currentChunk.toString().trim());
         }
 
@@ -259,7 +233,7 @@ public class ParseService {
 
         for (String sentence : sentences) {
             if (currentChunk.length() + sentence.length() > chunkSize) {
-                if (currentChunk.length() > 0) {
+                if (!currentChunk.isEmpty()) {
                     chunks.add(currentChunk.toString().trim());
                     currentChunk = new StringBuilder();
                 }
@@ -275,7 +249,7 @@ public class ParseService {
             }
         }
 
-        if (currentChunk.length() > 0) {
+        if (!currentChunk.isEmpty()) {
             chunks.add(currentChunk.toString().trim());
         }
 

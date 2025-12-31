@@ -3,10 +3,12 @@ import org.example.DTO.EsDocument;
 import org.example.DTO.TextChunk;
 import org.example.client.EmbeddingClient;
 import org.example.entity.DocumentVector;
+import org.example.exception.CustomException;
 import org.example.repository.DocumentVectorRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -36,49 +38,50 @@ public class VectorizationService {
      * @param isPublic 是否公开
      */
     public void vectorize(String fileMd5, String userId, String orgTag, boolean isPublic) {
+        // 1. 直接获取分块实体，避免中间转换 (fetchTextChunks 逻辑内聚)
+        List<DocumentVector> chunks = documentVectorRepository.findByFileMd5(fileMd5);
+        if (chunks.isEmpty()) {
+            logger.warn("未找到可向量化的文本块 => fileMd5: {}", fileMd5);
+            return;
+        }
+
         try {
-            logger.info("开始向量化文件，fileMd5: {}, userId: {}, orgTag: {}, isPublic: {}",
-                    fileMd5, userId, orgTag, isPublic);
-
-            // 获取文件分块内容
-            List<TextChunk> chunks = fetchTextChunks(fileMd5);
-            if (chunks == null || chunks.isEmpty()) {
-                logger.warn("未找到分块内容，fileMd5: {}", fileMd5);
-                return;
-            }
-
-            // 提取文本内容
-            List<String> texts = chunks.stream()
-                    .map(TextChunk::getContent)
-                    .toList();
-
-            // 调用外部模型生成向量
+            // 2. 核心：提取文本并调用 Embedding 模型
+            List<String> texts = chunks.stream().map(DocumentVector::getTextContent).toList();
             List<float[]> vectors = embeddingClient.embed(texts);
 
-            // 构建 Elasticsearch 文档并存储
+            // 3. 构建并批量索引 ES 文档
             List<EsDocument> esDocuments = IntStream.range(0, chunks.size())
-                    .mapToObj(i -> new EsDocument(
-                            UUID.randomUUID().toString(),
-                            fileMd5,
-                            chunks.get(i).getChunkId(),
-                            chunks.get(i).getContent(),
-                            vectors.get(i),
-                            "deepseek-embed", // 更新为 DeepSeek 的模型版本
-                            userId,
-                            orgTag,
-                            isPublic
-                    ))
+                    .mapToObj(i -> buildEsDocument(chunks.get(i), vectors.get(i), fileMd5, userId, orgTag, isPublic))
                     .toList();
 
-            elasticsearchService.bulkIndex(esDocuments); // 批量存储到 Elasticsearch
+            elasticsearchService.bulkIndex(esDocuments);
 
-            logger.info("向量化完成，fileMd5: {}", fileMd5);
+            logger.info("向量化处理并入库成功 => fileMd5: {}, 总块数: {}", fileMd5, chunks.size());
+
         } catch (Exception e) {
-            logger.error("向量化失败，fileMd5: {}", fileMd5, e);
-            throw new RuntimeException("向量化失败", e);
+            throw new CustomException("向量化过程异常: " + e.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);
         }
+
     }
 
+    /**
+     * 辅助方法：构建 ES 文档对象
+     */
+    private EsDocument buildEsDocument(DocumentVector chunk, float[] vector, String fileMd5,
+                                       String userId, String orgTag, boolean isPublic) {
+        return new EsDocument(
+                UUID.randomUUID().toString(),
+                fileMd5,
+                chunk.getChunkId(),
+                chunk.getTextContent(),
+                vector,
+                "deepseek-embed",
+                userId,
+                orgTag,
+                isPublic
+        );
+    }
 
     /**
      * 获取文件分块内容
