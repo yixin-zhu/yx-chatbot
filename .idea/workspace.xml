@@ -6,14 +6,13 @@
   <component name="ChangeListManager">
     <list default="true" id="233c358a-129d-49a7-8f5a-0548ba491696" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/DTO/FileProcessingTask.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/DTO/FileProcessingTask.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/client/EmbeddingClient.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/client/EmbeddingClient.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/controller/ParseController.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/controller/ParseController.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/entity/DocumentVector.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/entity/DocumentVector.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/service/ElasticsearchService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/service/ElasticsearchService.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/service/FileProcessingService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/service/FileProcessingService.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/service/ParseService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/service/ParseService.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/service/VectorizationService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/service/VectorizationService.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/pom.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/DTO/EsDocument.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/DTO/EsDocument.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/client/DeepSeekClient.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/client/DeepSeekClient.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/controller/ChatController.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/controller/ChatController.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/controller/SearchController.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/controller/SearchController.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/handler/ChatHandler.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/handler/ChatHandler.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/org/example/service/HybridSearchService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/org/example/service/HybridSearchService.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

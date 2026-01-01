@@ -45,10 +45,12 @@ public class DeepSeekClient {
                              String context,
                              List<Map<String, String>> history,
                              Consumer<String> onChunk,
+                             Runnable onComplete, // 新增完成回调
                              Consumer<Throwable> onError) {
         
         Map<String, Object> request = buildRequest(userMessage, context, history);
-        
+
+        // 核心：调用 DeepSeek 的流式接口
         webClient.post()
                 .uri("/chat/completions")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -56,9 +58,46 @@ public class DeepSeekClient {
                 .retrieve()
                 .bodyToFlux(String.class)
                 .subscribe(
-                    chunk -> processChunk(chunk, onChunk),
-                    onError
+                        chunk -> {
+                            // DeepSeek 的 SSE 每一行通常以 "data: " 开头
+                            String[] lines = chunk.split("\n");
+                            for (String line : lines) {
+                                String data = line.trim();
+                                if (data.isEmpty()) continue;
+                                if (data.startsWith("data: ")) {
+                                    data = data.substring(6);
+                                }
+                                if ("[DONE]".equals(data)) {
+                                    // 收到结束信号，触发完成回调
+                                    onComplete.run();
+                                    return;
+                                }
+                                processJsonChunk(data, onChunk);
+                            }
+                        },
+                        err -> {
+                            logger.error("DeepSeek 流读取异常", err);
+                            onError.accept(err);
+                        },
+                        // Flux 本身的完成信号（作为兜底）
+                        () -> {
+                            logger.debug("Flux stream closed");
+                        }
                 );
+    }
+
+    private void processJsonChunk(String json, Consumer<String> onChunk) {
+        try {
+            // 避免重复创建 ObjectMapper
+            JsonNode node = new ObjectMapper().readTree(json);
+            String content = node.path("choices").get(0).path("delta").path("content").asText("");
+            if (!content.isEmpty()) {
+                onChunk.accept(content);
+            }
+        } catch (Exception e) {
+            // 忽略解析失败的非内容块（如空行或 metadata）
+            logger.trace("跳过不可解析的块: {}", json);
+        }
     }
     
     private Map<String, Object> buildRequest(String userMessage, 

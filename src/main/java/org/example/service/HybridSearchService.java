@@ -1,6 +1,8 @@
 package org.example.service;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch._types.FieldValue;
+import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 
 import org.example.DTO.EsDocument;
@@ -18,11 +20,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import co.elastic.clients.elasticsearch._types.query_dsl.Operator;
 
-import java.util.Collections;
-import java.util.List;
-import java.util.ArrayList;
-import java.util.Set;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -62,211 +60,151 @@ public class HybridSearchService {
      * @return 搜索结果列表
      */
     public List<SearchResult> searchWithPermission(String query, String userId, int topK) {
-        logger.debug("开始带权限搜索，查询: {}, 用户ID: {}", query, userId);
-
         try {
-            // 获取用户有效的组织标签（包含层级关系）
-            List<String> userEffectiveTags = getUserEffectiveOrgTags(userId);
-            logger.debug("用户 {} 的有效组织标签: {}", userId, userEffectiveTags);
-
-            // 获取用户的数据库ID用于权限过滤
+            // 1. 准备权限参数
             String userDbId = getUserDbId(userId);
-            logger.debug("用户 {} 的数据库ID: {}", userId, userDbId);
+            List<String> orgTags = getUserEffectiveOrgTags(userId);
+            List<Float> queryVector = embedToVectorList(query);
 
-            // 生成查询向量
-            final List<Float> queryVector = embedToVectorList(query);
+            Query permissionFilter = buildPermissionQuery(userDbId, orgTags);
 
-            // 如果向量生成失败，仅使用文本匹配
-            if (queryVector == null) {
-                logger.warn("向量生成失败，仅使用文本匹配进行搜索");
-                return textOnlySearchWithPermission(query, userDbId, userEffectiveTags, topK);
-            }
+            // 2. 核心: 搜索逻辑
+            SearchResponse<EsDocument> response = esClient.search(s -> s
+                            .index("knowledge_base")
+                            .size(topK)
+                            // 1. 顶层 KNN：负责向量语义召回
+                            .knn(kn -> kn
+                                    .field("vector")
+                                    .queryVector(queryVector)
+                                    .k(topK)
+                                    .numCandidates(100)
+                                    .filter(permissionFilter) // KNN 内部过滤权限
+                                    .boost(10.0f)
+                            )
+                            // 2. 顶层 Query：负责关键词匹配 + 权限硬过滤
+                            .query(q -> q
+                                    .bool(b -> b
+                                            .must(m -> m.match(ma -> ma.field("textContent").query(query)))
+                                            .filter(permissionFilter)
+                                    )
+                            )
+                    , EsDocument.class);
 
-            logger.debug("向量生成成功，开始执行混合搜索 KNN");
-
-            SearchResponse<EsDocument> response = esClient.search(s -> {
-                s.index("knowledge_base");
-                // KNN 召回
-                int recallK = topK * 30; // KNN 召回窗口
-                s.knn(kn -> kn
-                        .field("vector")
-                        .queryVector(queryVector)
-                        .k(recallK)
-                        .numCandidates(recallK)
-                );
-                // 必须命中关键词 + 权限过滤
-                s.query(q -> q.bool(b -> b
-                        .must(mst -> mst.match(m -> m.field("textContent").query(query)))
-                        .filter(f -> f.bool(bf -> bf
-                                // 条件1: 用户可访问自己的文档
-                                .should(s1 -> s1.term(t -> t.field("userId").value(userDbId)))
-                                // 条件2: 公开文档
-                                //.should(s2 -> s2.term(t -> t.field("public").value(true)))
-                                // 条件3: 组织标签过滤
-                                /*
-                                .should(s3 -> {
-                                    if (userEffectiveTags.isEmpty()) {
-                                        return s3.matchNone(mn -> mn);
-                                    } else if (userEffectiveTags.size() == 1) {
-                                        return s3.term(t -> t.field("orgTag").value(userEffectiveTags.get(0)));
-                                    } else {
-                                        return s3.bool(inner -> {
-                                            userEffectiveTags.forEach(tag -> inner.should(sh2 -> sh2.term(t -> t.field("orgTag").value(tag))));
-                                            return inner;
-                                        });
-                                    }
-                                    */
-                        ))
-                ));
-
-                // 第二阶段 BM25 rescore
-                s.rescore(r -> r
-                        .windowSize(recallK)
-                        .query(rq -> rq
-                                .queryWeight(0.2d)               // 保留部分 KNN 分
-                                .rescoreQueryWeight(1.0d)        // BM25 主导
-                                .query(rqq -> rqq.match(m -> m
-                                        .field("textContent")
-                                        .query(query)
-                                        .operator(Operator.And)
-                                ))
-                        )
-                );
-                s.size(topK);
-                return s;
-            }, EsDocument.class);
-
-            logger.debug("Elasticsearch查询执行完成，命中数量: {}, 最大分数: {}",
-                    response.hits().total().value(), response.hits().maxScore());
-
-            List<SearchResult> results = response.hits().hits().stream()
-                    .map(hit -> {
-                        assert hit.source() != null;
-                        logger.debug("搜索结果 - 文件: {}, 块: {}, 分数: {}, 内容: {}",
-                                hit.source().getFileMd5(), hit.source().getChunkId(), hit.score(),
-                                hit.source().getTextContent().substring(0, Math.min(50, hit.source().getTextContent().length())));
-                        return new SearchResult(
-                                hit.source().getFileMd5(),
-                                hit.source().getChunkId(),
-                                hit.source().getTextContent(),
-                                hit.score(),
-                                hit.source().getUserId(),
-                                hit.source().getOrgTag(),
-                                hit.source().isPublic()
-                        );
-                    })
-                    .toList();
-
-            logger.debug("返回搜索结果数量: {}", results.size());
-            attachFileNames(results);
-            return results;
+            return processHits(response);
         } catch (Exception e) {
-            logger.error("带权限的搜索失败", e);
-            // 发生异常时尝试使用纯文本搜索作为后备方案
-            try {
-                logger.info("尝试使用纯文本搜索作为后备方案");
-                return textOnlySearchWithPermission(query, getUserDbId(userId), getUserEffectiveOrgTags(userId), topK);
-            } catch (Exception fallbackError) {
-                logger.error("后备搜索也失败", fallbackError);
-                return Collections.emptyList();
-            }
+            logger.error("混合搜索失败，转为兜底方案", e);
+            return textOnlySearchWithPermission(query, userId, getUserEffectiveOrgTags(userId), topK);
+        }
+    }
+
+    /**
+     * 构建统一的权限过滤查询
+     */
+    private Query buildPermissionQuery(String userId, List<String> orgTags) {
+        return Query.of(q -> q.bool(b -> b
+                .should(s -> s.term(t -> t.field("userId").value(userId)))    // 自己的
+                .should(s -> s.term(t -> t.field("isPublic").value(true)))   // 公开的
+                .should(s -> {                                               // 组织的
+                    if (orgTags == null || orgTags.isEmpty()) return s.matchNone(m -> m);
+                    return s.terms(t -> t
+                            .field("orgTag")
+                            .terms(v -> v.value(orgTags.stream().map(FieldValue::of).toList()))
+                    );
+                })
+                .minimumShouldMatch("1")
+        ));
+    }
+
+    /**
+     * 处理 ES 搜索响应，转换为业务 SearchResult 列表
+     */
+    private List<SearchResult> processHits(SearchResponse<EsDocument> response) {
+        // 1. 从 SearchResponse 中提取 Hit 对象列表
+        List<SearchResult> results = response.hits().hits().stream()
+                .map(hit -> {
+                    EsDocument doc = hit.source();
+                    // 此时 hit.score() 是 RRF 融合后的分数或 KNN 分数
+                    double score = hit.score() != null ? hit.score() : 0.0;
+                    if (doc == null) return null;
+                    // 打印调试日志
+                    logger.debug("处理命中结果 - ID: {}, 分数: {}, 内容预览: {}",
+                            doc.getFileMd5(), score,
+                            doc.getTextContent().substring(0, Math.min(30, doc.getTextContent().length())));
+
+                    // 转换为 DTO
+                    return new SearchResult(
+                            doc.getFileMd5(),
+                            doc.getChunkId(),
+                            doc.getTextContent(),
+                            score,
+                            doc.getUserId(),
+                            doc.getOrgTag(),
+                            doc.isPublic()
+                    );
+                })
+                .filter(Objects::nonNull) // 过滤掉可能的空对象
+                .toList();
+
+        logger.info("ES 原始命中数量: {}, 转换后结果数量: {}", response.hits().total().value(), results.size());
+
+        // 2. 关键：补充文件名（关联数据库查询）
+        attachFileNames(results);
+
+        return results;
+    }
+
+    private void attachFileNames(List<SearchResult> results) {
+        if (results == null || results.isEmpty()) {
+            return;
+        }
+        try {
+            // 收集所有唯一的 fileMd5
+            Set<String> md5Set = results.stream()
+                    .map(SearchResult::getFileMd5)
+                    .collect(Collectors.toSet());
+            List<FileUpload> uploads = fileUploadRepository.findByFileMd5In(new java.util.ArrayList<>(md5Set));
+            Map<String, String> md5ToName = uploads.stream()
+                    .collect(Collectors.toMap(FileUpload::getFileMd5, FileUpload::getFileName));
+            // 填充文件名
+            results.forEach(r -> r.setFileName(md5ToName.get(r.getFileMd5())));
+        } catch (Exception e) {
+            logger.error("补充文件名失败", e);
         }
     }
 
     /**
      * 仅使用文本匹配的带权限搜索方法
      */
-    private List<SearchResult> textOnlySearchWithPermission(String query, String userDbId, List<String> userEffectiveTags, int topK) {
-        try {
-            logger.debug("开始执行纯文本搜索，用户数据库ID: {}, 标签: {}", userDbId, userEffectiveTags);
+    private List<SearchResult> textOnlySearchWithPermission(String query, String userId, List<String> userEffectiveTags, int topK) {
+        String userDbId = getUserDbId(userId);
+        List<String> orgTags = getUserEffectiveOrgTags(userId);
 
+        logger.info("执行兜底纯文本搜索: query={}, userId={}", query, userId);
+
+        try {
             SearchResponse<EsDocument> response = esClient.search(s -> s
                             .index("knowledge_base")
-                            .query(q -> q
-                                    .bool(b -> b
-                                            // 匹配内容相关性
-                                            .must(m -> m
-                                                    .match(ma -> ma
-                                                            .field("textContent")
-                                                            .query(query)
-                                                    )
-                                            )
-                                            // 权限过滤
-                                            .filter(f -> f
-                                                    .bool(bf -> bf
-                                                            // 条件1: 用户可以访问自己的文档
-                                                            .should(s1 -> s1
-                                                                    .term(t -> t
-                                                                            .field("userId")
-                                                                            .value(userDbId)
-                                                                    )
-                                                            )
-                                                            // 条件2: 用户可以访问公开的文档
-                                                            .should(s2 -> s2
-                                                                    .term(t -> t
-                                                                            .field("public")
-                                                                            .value(true)
-                                                                    )
-                                                            )
-                                                            // 条件3: 用户可以访问其所属组织的文档（包含层级关系）
-                                                            .should(s3 -> {
-                                                                if (userEffectiveTags.isEmpty()) {
-                                                                    return s3.matchNone(mn -> mn);
-                                                                } else if (userEffectiveTags.size() == 1) {
-                                                                    // 单个标签使用 term 查询
-                                                                    return s3.term(t -> t
-                                                                            .field("orgTag")
-                                                                            .value(userEffectiveTags.get(0))
-                                                                    );
-                                                                } else {
-                                                                    // 多个标签使用 bool should 组合多个 term 查询
-                                                                    return s3.bool(innerBool -> {
-                                                                        userEffectiveTags.forEach(tag ->
-                                                                                innerBool.should(sh -> sh.term(t -> t
-                                                                                        .field("orgTag")
-                                                                                        .value(tag)
-                                                                                ))
-                                                                        );
-                                                                        return innerBool;
-                                                                    });
-                                                                }
-                                                            })
-                                                    )
-                                            )
-                                    )
-                            )
-                            .minScore(0.3d)
-                            .size(topK),
-                    EsDocument.class
-            );
+                            .query(q -> q.bool(b -> b
+                                    // 1. 内容匹配：增加 fuzziness(AUTO) 提高对错别字的容忍度
+                                    .must(m -> m.match(ma -> ma
+                                            .field("textContent")
+                                            .query(query)
+                                            .fuzziness("AUTO")
+                                            .operator(Operator.Or) // 兜底时通常希望结果多一些，故用 Or
+                                    ))
+                                    // 2. 权限过滤：直接复用我们之前写好的统一权限函数
+                                    .filter(buildPermissionQuery(userDbId, orgTags))
+                            ))
+                            .size(topK)
+                            .minScore(0.1d) // 适当调低阈值，确保在 Embedding 挂掉时能搜到尽可能相关的内容
+                    , EsDocument.class);
 
-            logger.debug("纯文本查询执行完成，命中数量: {}, 最大分数: {}",
-                    response.hits().total().value(), response.hits().maxScore());
+            // 3. 结果处理：直接复用 processHits，包含日志、转换和 attachFileNames
+            return processHits(response);
 
-            List<SearchResult> results = response.hits().hits().stream()
-                    .map(hit -> {
-                        assert hit.source() != null;
-                        logger.debug("纯文本搜索结果 - 文件: {}, 块: {}, 分数: {}, 内容: {}",
-                                hit.source().getFileMd5(), hit.source().getChunkId(), hit.score(),
-                                hit.source().getTextContent().substring(0, Math.min(50, hit.source().getTextContent().length())));
-                        return new SearchResult(
-                                hit.source().getFileMd5(),
-                                hit.source().getChunkId(),
-                                hit.source().getTextContent(),
-                                hit.score(),
-                                hit.source().getUserId(),
-                                hit.source().getOrgTag(),
-                                hit.source().isPublic()
-                        );
-                    })
-                    .toList();
-
-            logger.debug("返回纯文本搜索结果数量: {}", results.size());
-            attachFileNames(results);
-            return results;
         } catch (Exception e) {
-            logger.error("纯文本搜索失败", e);
-            return new ArrayList<>();
+            logger.error("兜底纯文本搜索彻底失败", e);
+            return Collections.emptyList();
         }
     }
 
@@ -402,7 +340,6 @@ public class HybridSearchService {
             User user;
             try {
                 Long userIdLong = Long.parseLong(userId);
-                logger.debug("解析用户ID为Long: {}", userIdLong);
                 user = userRepository.findById(userIdLong)
                         .orElseThrow(() -> new CustomException("User not found with ID: " + userId, HttpStatus.NOT_FOUND));
                 logger.debug("通过ID找到用户: {}", user.getUsername());
@@ -453,22 +390,5 @@ public class HybridSearchService {
         }
     }
 
-    private void attachFileNames(List<SearchResult> results) {
-        if (results == null || results.isEmpty()) {
-            return;
-        }
-        try {
-            // 收集所有唯一的 fileMd5
-            Set<String> md5Set = results.stream()
-                    .map(SearchResult::getFileMd5)
-                    .collect(Collectors.toSet());
-            List<FileUpload> uploads = fileUploadRepository.findByFileMd5In(new java.util.ArrayList<>(md5Set));
-            Map<String, String> md5ToName = uploads.stream()
-                    .collect(Collectors.toMap(FileUpload::getFileMd5, FileUpload::getFileName));
-            // 填充文件名
-            results.forEach(r -> r.setFileName(md5ToName.get(r.getFileMd5())));
-        } catch (Exception e) {
-            logger.error("补充文件名失败", e);
-        }
-    }
+
 }

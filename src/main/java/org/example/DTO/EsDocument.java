@@ -39,6 +39,9 @@ public class EsDocument {
         this.orgTag = orgTag;
         this.isPublic = isPublic;
     }
-    
 
+
+    public boolean isPublic() {
+        return isPublic;
+    }
 }
