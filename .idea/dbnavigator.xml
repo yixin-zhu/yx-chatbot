@@ -26,7 +26,10 @@
     <last-used-providers />
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
-    <open-files />
+    <open-files>
+      <object connection-id="feea93ce-b975-4228-9a87-9b6d1aa79451" object-ref="schemas/yx_chatbot/tables/users" />
+      <object connection-id="feea93ce-b975-4228-9a87-9b6d1aa79451" object-ref="schemas/yx_chatbot/tables/file_upload" />
+    </open-files>
   </component>
   <component name="DBNavigator.Project.DatasetFilterManager">
     <filter-actions connection-id="6f423b55-bd6f-43d7-a82b-c6cd6a6a10f4" dataset="yx_chatbot.file_upload" active-filter-id="">
@@ -44,6 +47,7 @@
         <condition column="id" operator="=" value="" active="true" />
       </filter>
     </filter-actions>
+    <filter-actions connection-id="feea93ce-b975-4228-9a87-9b6d1aa79451" dataset="yx_chatbot.users" active-filter-id="EMPTY_FILTER" />
     <filter-actions connection-id="feea93ce-b975-4228-9a87-9b6d1aa79451" dataset="yx_chatbot.file_upload" active-filter-id="EMPTY_FILTER" />
     <filter-actions connection-id="feea93ce-b975-4228-9a87-9b6d1aa79451" dataset="yx_chatbot.conversations" active-filter-id="EMPTY_FILTER" />
     <filter-actions connection-id="feea93ce-b975-4228-9a87-9b6d1aa79451" dataset="yx_chatbot.document_vectors" active-filter-id="EMPTY_FILTER" />

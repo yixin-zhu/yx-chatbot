@@ -16,7 +16,7 @@ class ZhipuAIStreamClientTest {
         zhipuAIStreamClient = new ZhipuAIStreamClient();
         try{
             zhipuAIStreamClient.streamChatCompletion("please introduce yourself");
-            Thread.sleep(100000);
+            Thread.sleep(1000000);
         } catch (Exception e){
             e.printStackTrace();
         }
